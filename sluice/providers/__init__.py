@@ -72,6 +72,15 @@ def require_api_key(env_var: str, provider: str) -> str:
     return key
 
 
+# Aliase auf den kanonischen Adapter-Namen — Profile sprechen historisch von "claude" (§4).
+_ALIASES = {"claude": "anthropic"}
+
+
+def canonical_provider(name: str) -> str:
+    """Kanonischer Provider-Name für Vergleiche (z. B. `SLUICE_PROVIDER`-Lock, §7.3)."""
+    return _ALIASES.get(name, name)
+
+
 def select_provider(
     name: str, *, http_client: httpx.AsyncClient | None = None
 ) -> ProviderAdapter:
@@ -97,6 +106,7 @@ def select_provider(
 __all__ = [
     "PROVIDER_TIMEOUT",
     "ProviderAdapter",
+    "canonical_provider",
     "ProviderConfigError",
     "ProviderError",
     "ProviderResponse",

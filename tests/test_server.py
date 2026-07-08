@@ -172,6 +172,60 @@ async def test_completions_stream_reverses_across_chunks() -> None:
     assert body.rstrip().endswith("data: [DONE]")
 
 
+# ---------- Provider-Lock (§7.3, Rev. 5): ein Service pro Gateway ----------
+
+
+def _locked_client(lock: str, adapter: FakeAdapter | None = None) -> tuple[httpx.AsyncClient, FakeAdapter]:
+    adapter = adapter or FakeAdapter()
+    app = create_app(
+        PROFILES, adapter_factory=lambda name: adapter, audit=AuditLog(), provider_lock=lock
+    )
+    transport = httpx.ASGITransport(app=app)
+    return httpx.AsyncClient(transport=transport, base_url="http://sluice"), adapter
+
+
+async def test_health_reports_provider_lock() -> None:
+    client, _ = _locked_client("anthropic")
+    resp = await client.get("/v1/health")
+    assert resp.json()["provider_lock"] == "anthropic"
+
+
+async def test_locked_instance_rejects_other_provider() -> None:
+    client, adapter = _locked_client("anthropic")
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={**BODY, "provider": "openai"},  # in aider-codes Allowlist, aber falsches Gateway
+        headers={"X-Sluice-Profile": "aider-code"},
+    )
+    assert resp.status_code == 403
+    assert "anthropic" in resp.json()["error"]["reason"]
+    assert adapter.calls == []
+
+
+async def test_locked_instance_defaults_to_its_provider_via_alias() -> None:
+    # Lock "anthropic", Allowlist sagt historisch "claude" — kanonisch derselbe Provider:
+    # der Default greift, Guard-Allowlist und Lock sind beide erfüllt.
+    adapter = FakeAdapter(reply="Erledigt, ⟦EMAIL_1⟧ ist informiert.")
+    client, _ = _locked_client("claude", adapter)  # Alias wird kanonisiert
+    resp = await client.post(
+        "/v1/chat/completions",
+        json=BODY,  # kein provider im Body → Lock ist der Default
+        headers={"X-Sluice-Profile": "aider-code", "X-Sluice-Scope": "s-lock-1"},
+    )
+    assert resp.status_code == 200
+    assert adapter.calls == [[{"role": "user", "content": "Mail an ⟦EMAIL_1⟧ schicken"}]]
+
+
+async def test_locked_instance_still_enforces_allowlist() -> None:
+    # Lock erlaubt "gemini", aber das Profil nicht — der Guard blockiert fail-closed.
+    client, adapter = _locked_client("gemini")
+    resp = await client.post(
+        "/v1/chat/completions", json=BODY, headers={"X-Sluice-Profile": "aider-code"}
+    )
+    assert resp.status_code == 403
+    assert adapter.calls == []
+
+
 # ---------- /v1/egress/guard (§7.1) ----------
 
 

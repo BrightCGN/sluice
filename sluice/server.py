@@ -17,6 +17,12 @@ Modus (Rev. 4, safety first): Default ist **irreversibel** (generalizing). Rever
 Start: `uvicorn sluice.server:app` mit `SLUICE_PROFILES=/pfad/profile.toml`.
 Ohne Profil-Datei startet der Service mit leerer Profil-Menge — Default-Deny (§4.3):
 jeder Request wird blockiert, nichts geht still raus.
+
+Betriebsvariante „ein Service pro Gateway" (Rev. 5, §7.3): ist `SLUICE_PROVIDER`
+gesetzt (bzw. `provider_lock` übergeben), bedient die Instanz genau diesen einen
+Provider. Requests an andere Provider ⇒ 403, fail-closed; ohne `provider` im Body
+defaultet die Instanz auf ihren Lock. Guard-Kette und Verifier bleiben unverändert —
+der Lock ist eine zusätzliche Schranke, nie eine Lockerung.
 """
 
 from __future__ import annotations
@@ -41,6 +47,7 @@ from sluice.providers import (
     ProviderAdapter,
     ProviderConfigError,
     ProviderError,
+    canonical_provider,
     select_provider,
 )
 from sluice.strategies import EgressPayload, Scope
@@ -89,11 +96,14 @@ def create_app(
     profiles_path: str | None = None,
     adapter_factory: Callable[[str], ProviderAdapter] = select_provider,
     audit: AuditLog | None = None,
+    provider_lock: str | None = None,
 ) -> Starlette:
     """App-Factory. Profil-Quelle: Argument > `profiles_path` > Env `SLUICE_PROFILES` > leer.
 
     Leer heißt Default-Deny (§4.3) — der Service startet, blockiert aber jeden Egress.
     adapter_factory/audit sind Injektionspunkte für Tests (kein Netz, §Test-Disziplin).
+    provider_lock (Fallback: Env `SLUICE_PROVIDER`) beschränkt die Instanz auf genau
+    einen Provider — Betriebsvariante „ein Service pro Gateway" (Rev. 5, §7.3).
     """
     if profiles is None:
         path = profiles_path or os.environ.get("SLUICE_PROFILES", "")
@@ -105,8 +115,29 @@ def create_app(
 
     resolved: dict[str, Profile] = profiles
 
+    lock_raw = provider_lock if provider_lock is not None else os.environ.get(
+        "SLUICE_PROVIDER", ""
+    ).strip()
+    lock: str | None = canonical_provider(lock_raw) if lock_raw else None
+    if lock is not None:
+        log.info("server.provider_lock", provider=lock)
+
+    def _default_provider(effective: Profile | None) -> str:
+        """Provider-Default (§7.2): auf einer Gateway-Instanz deren Lock, sonst der
+        erste Allowlist-Eintrag. Bevorzugt den Allowlist-Namen, der kanonisch zum
+        Lock passt, damit der Guard (§4.1) die Allowlist wörtlich prüfen kann."""
+        allowlist = effective.provider_allowlist if effective else ()
+        if lock is not None:
+            for candidate in allowlist:
+                if canonical_provider(candidate) == lock:
+                    return candidate
+            return lock  # nicht in der Allowlist — der Guard blockiert das fail-closed
+        return allowlist[0] if allowlist else ""
+
     async def health(_: Request) -> JSONResponse:
-        return JSONResponse({"status": "ok", "profiles": len(resolved)})
+        return JSONResponse(
+            {"status": "ok", "profiles": len(resolved), "provider_lock": lock}
+        )
 
     async def egress_guard(request: Request) -> JSONResponse:
         """Guard-only (§7.1): Antwort immer 200, `released` trägt die Entscheidung."""
@@ -164,9 +195,14 @@ def create_app(
         purpose = body.get("purpose") or (
             effective.allowed_purposes[0] if effective and effective.allowed_purposes else ""
         )
-        provider_target = body.get("provider") or (
-            effective.provider_allowlist[0] if effective and effective.provider_allowlist else ""
-        )
+        provider_target = body.get("provider") or _default_provider(effective)
+
+        # Gateway-Instanz (Rev. 5): nur der eigene Provider, alles andere 403 fail-closed.
+        if lock is not None and provider_target and canonical_provider(provider_target) != lock:
+            return _blocked(
+                f"Diese Instanz bedient nur Provider '{lock}' (SLUICE_PROVIDER); "
+                f"angefragt: '{provider_target}'."
+            )
 
         scope_key = request.headers.get("X-Sluice-Scope")
         scope = Scope(key=scope_key) if scope_key else None

@@ -1,6 +1,9 @@
 # Sluice — Boundary- & Contract-Spec (v1)
 
-> **Stand:** 2026-07-08. **Revision 4:** Default-Modus zurück auf **generalizing
+> **Stand:** 2026-07-08. **Revision 5:** Betriebsvariante „ein Service pro Gateway" —
+> optionaler Provider-Lock `SLUICE_PROVIDER` pro Instanz (§7.3), additive Schranke,
+> Invarianten unverändert.
+> **Revision 4:** Default-Modus zurück auf **generalizing
 > (irreversibel)** — safety first; die Default-Umkehr aus Revision 3 ist rückgängig.
 > Pseudonymizing bleibt explizites Opt-in (per Profil oder Request-`mode`, §2/§7.2).
 > **Revision 3:** Sluice läuft als eigenständiger HTTP-Service (`sluice/server.py`, §7).
@@ -320,6 +323,14 @@ Die Allowlist (§4.1) begrenzt pro Profil, welche erlaubt sind.
   `stream_reverser` / `reverse_obj` derselben Strategie-Instanz (Scope-Konsistenz, §8).
 - **Failover/Health/Tenant-Order:** *(post-v1)* — v1 ruft genau den einen per Profil
   erlaubten und vom Konsumenten gewählten Provider.
+- **Betriebsvariante „ein Service pro Gateway" (Revision 5):** derselbe Sluice-Code kann
+  als eine Instanz **pro Provider** betrieben werden (`SLUICE_PROVIDER=<name>`, systemd-Template
+  `deploy/sluice@.service`, ein Port und **nur der eigene API-Key** pro Instanz). Der Lock ist
+  eine **zusätzliche** Schranke: Requests an einen anderen Provider ⇒ 403, fail-closed; ohne
+  `provider` im Body defaultet die Instanz auf ihren Lock (Allowlist §4.1 gilt unverändert).
+  Jede Instanz führt die volle Kette Gate → Strategie → Verifier → Audit aus; alle Instanzen
+  teilen dieselbe Profil-Datei — **eine** Policy bleibt eine Policy. Kein Ersatz für die
+  Sammel-Instanz (`deploy/sluice.service`), sondern eine Deploy-Wahl.
 
 ### 7.4 Versionierte Schnittstelle (ab v1 Pflicht)
 Sluice ist ab jetzt eine **Abhängigkeit mit Vertrag** — ein Breaking Change trifft alle
