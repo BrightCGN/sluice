@@ -94,5 +94,9 @@ def test_provider_allowlist() -> None:
 
 
 def test_default_profile_strategy_is_generalizing() -> None:
-    # Pseudonymizing nur per explizitem Opt-in (Spec §2) — der Default ist die Einbahnstraße.
+    # Rev. 4 (Spec §2, safety first): Default ist irreversibel — pseudonymizing
+    # nur per explizitem Opt-in, nie geerbt.
     assert Profile(name="neu").strategy == "generalizing"
+    assert parse_profiles('[profile."neu"]\negress_enabled = true\n')["neu"].strategy == (
+        "generalizing"
+    )

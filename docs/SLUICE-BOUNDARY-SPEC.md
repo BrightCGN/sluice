@@ -1,6 +1,12 @@
 # Sluice — Boundary- & Contract-Spec (v1)
 
-> **Stand:** 2026-07-07. Erstfassung, abgeleitet aus dem Seite-an-Seite-Vergleich der
+> **Stand:** 2026-07-08. **Revision 4:** Default-Modus zurück auf **generalizing
+> (irreversibel)** — safety first; die Default-Umkehr aus Revision 3 ist rückgängig.
+> Pseudonymizing bleibt explizites Opt-in (per Profil oder Request-`mode`, §2/§7.2).
+> **Revision 3:** Sluice läuft als eigenständiger HTTP-Service (`sluice/server.py`, §7).
+> **Revision 2:** Provider-Kommunikation wandert von PrismClaw-Gateway
+> nach Sluice (§1, §1.1, §7.3) — bewusste Design-Änderung.
+> Erstfassung 2026-07-07, abgeleitet aus dem Seite-an-Seite-Vergleich der
 > zwei realen Referenzimplementierungen: Temper `src/temper/egress/{guard,policy,verifier}.py`
 > (irreversibel/generalisierend) und PrismClaw `prismclaw.anon` in
 > `backend/claude/prismclaw/core/anthropic_client.py` (reversibel/pseudonymisierend).
@@ -24,7 +30,7 @@ Lebenszyklus (Security-Takt), **kein** in Temper/PrismClaw eingebettetes Modul. 
 binden es über ein **dünnes Client-SDK** ein (die einzige geteilte Library — kapselt Auth,
 Protokoll, Retry).
 
-**Sluice sitzt *vor* dem PrismClaw-Routing-Gateway, nicht darin:**
+**Sluice spricht die Provider direkt an (Revision 2):**
 
 ```
 Konsument (im Perimeter)
@@ -36,24 +42,24 @@ Konsument (im Perimeter)
 │   • Strategie        (§3  generalize|pseudon.)│
 │   • Verifier         (§5  harter Riegel)      │
 │   • Audit            (§6  egress_log)          │
+│   • Provider-Adapter (§7.3, nach dem Riegel)  │
 │      ▲ reverse (nur pseudonymisierender Modus)│
-└──────┬───────────────────────────────────────┘
-       │  nur sanitisierter Text
-       ▼
-┌──────────────────────────────────────────────┐
-│  PrismClaw-Gateway  (Routing/Failover)        │  ← UNVERÄNDERT, kein Sanitisierungs-Wissen
-│   • Tenant-Order, Priority-Failover, Health   │
-└──────┬────────────┬────────────┬──────────────┘
-   ┌───▼───┐   ┌────▼────┐   ┌───▼────┐
-   │Claude │   │ OpenAI  │   │ Gemini │  …
-   └───────┘   └─────────┘   └────────┘
+└──────┬────────────┬────────────┬─────────────┘
+       │ nur sanitisierter Text (Invariante 2)
+   ┌───▼───┐   ┌────▼────┐   ┌───▼────┐   ┌────────┐
+   │Claude │   │ OpenAI  │   │ Gemini │   │Mistral │  …
+   └───────┘   └─────────┘   └────────┘   └────────┘
 ```
 
-**Souveränitäts-Gewinn gegenüber heute (bewusst festgehalten):** Aktuell steckt die
-Anonymisierung *innerhalb* des PrismClaw-Gateways (`anon` im `anthropic_client`) — d. h. das
-Gateway sieht Klartext und **muss** im Trust-Boundary liegen. Zieht man die Sanitisierung
-heraus in ein vorgelagertes Sluice, sieht das Routing-Gateway nur noch sanitisierten Text.
-Die Konsolidierung *verbessert* die Souveränitäts-Story, statt nur zu deduplizieren.
+**Souveränitäts-Story (Revision 2, bewusst festgehalten):** Ursprünglich sollte Sluice nur
+sanitisieren und das PrismClaw-Gateway routen. Mit Revision 2 übernimmt Sluice die
+Provider-Kommunikation selbst — der Provider-Aufruf liegt damit *hinter* Gate, Strategie,
+Verifier und Audit im selben Prozess. Die zentrale Zusage bleibt unverändert: **kein
+Provider-Adapter wird je mit unverifiziertem Text aufgerufen**; der Adapter ist die letzte
+Schicht der Kette, nicht ein Bypass daran vorbei. Der Trade-off dieser Änderung ist ebenso
+festgehalten: Sluice trägt jetzt Provider-API-Keys und Erreichbarkeits-Verantwortung
+(vorher Gateway-Sache); Routing-Feinheiten wie Tenant-Order/Priority-Failover/Health sind
+*(post-v1)* und werden nur bei Bedarf nachgezogen.
 
 ### 1.1 Verantwortungs-Schnitt (Mechanismus vs. Policy)
 
@@ -63,8 +69,9 @@ Die Konsolidierung *verbessert* die Souveränitäts-Story, statt nur zu dedupliz
 | Strategie-Auswahl ausführen | ✅ | — (wählt nur via Profil) |
 | **Semantische Generalisierung** (validierter Fix → übertragbare Lektion) | — | ✅ Temper-Businesslogik |
 | Detektor-**Muster** (welche Identifier für diese Domäne) | Engine ✅ / Muster als Profil | ✅ deklariert Profil |
-| Provider-**Routing/Failover/Health** | — | PrismClaw-Gateway (§1) |
-| Upstream-Provider-API-Keys | — (nie in Sluice) | PrismClaw-Gateway, per Tenant |
+| Provider-**Kommunikation** (Adapter Claude/OpenAI/Gemini/Mistral) | ✅ (§7.3, Revision 2) | — (wählt Provider via Allowlist §4.1) |
+| Upstream-Provider-API-Keys | ✅ per Env, nie im Profil/Audit (§7.3) | — |
+| Failover/Health/Tenant-Order | *(post-v1)* | — |
 
 **Kernregel:** Sluice garantiert *„kein Identifier überquert die Grenze" + Audit* — projekt­unabhängig.
 Die *semantische* Generalisierung bleibt beim Konsumenten. Zieht man Domänenlogik nach Sluice,
@@ -91,7 +98,7 @@ Der **Schalter** wählt eine *Strategie-Implementierung*, kein `if reversible:` 
 
 ```
 SanitizationStrategy (Interface)
-  ├─ GeneralizingStrategy    → forward() nur; kein Reverse-Leg          [DEFAULT]
+  ├─ GeneralizingStrategy    → forward() nur; kein Reverse-Leg          [DEFAULT, Rev. 4]
   └─ PseudonymizingStrategy  → forward() + reverse() + stream_reverser
                                + tool_arg_reversal + Mapping-Lebenszyklus
 ```
@@ -104,10 +111,14 @@ SanitizationStrategy (Interface)
    auch dann darf nur ein *Pseudonym* raus, nie ein echter Wert, den das Mapping übersah.
 3. **Audit** (§6) protokolliert jeden Durchlass append-only, reviewbares Vorher/Nachher.
 
-**Default & Opt-in:** `GeneralizingStrategy` ist der **Default**. `PseudonymizingStrategy` ist
-die **explizite Opt-in-Ausnahme** — weil sie die schwächere DSGVO-Zusage ist *und* Zustand mit
-Lebenszyklus einführt. Ein neues Projekt bekommt sie nie durch Vererbung, nur durch bewusste
-Deklaration (Default-Deny, §4.3).
+**Default & Opt-in (Revision 4, safety first):** `GeneralizingStrategy` (irreversibel) ist
+der **Default** — die stärkere DSGVO-Zusage: es entsteht keine personenbezogene
+Mapping-Tabelle, nichts ist rückrechenbar. `PseudonymizingStrategy` ist die **explizite
+Opt-in-Ausnahme**, wählbar per Profil (`strategy = "pseudonymizing"`) oder per Request
+(`mode: "reversible"`, §7.2) — nie durch Vererbung, nur durch bewusste Deklaration.
+(Historie: Revision 3 hatte den Default kurzzeitig umgekehrt; Revision 4 nimmt das zurück.)
+Unverändert in beiden Modi: Verifier gleich streng (Invariante 2), Profil-Gate/Default-Deny
+(§4.3), v1-Mapping-Storage nur `memory` mit TTL/Scope-Aufräumen (§8).
 
 ---
 
@@ -151,14 +162,14 @@ seiner Egress-Erlaubnis.
 
 ```toml
 [profile."temper"]
-strategy            = "generalizing"          # generalizing | pseudonymizing
+strategy            = "generalizing"          # = Default (Rev. 4); Angabe optional
 egress_enabled      = true                    # false = souverän/air-gapped: NICHTS raus (§4.2)
 allowed_purposes    = ["external_escalation", "promotion_upload"]
 provider_allowlist  = ["claude", "gemini"]    # welche Provider dieses Profil überhaupt darf (§4.1)
 detector_profile    = "infra"                 # welches Detektor-Set der Verifier lädt (§5.1)
 
 [profile."aider-code"]
-strategy            = "pseudonymizing"        # explizites Opt-in
+strategy            = "pseudonymizing"        # explizites Opt-in (Rev. 4)
 egress_enabled      = true
 allowed_purposes    = ["code_completion"]
 provider_allowlist  = ["claude"]
@@ -260,21 +271,28 @@ POST /v1/egress/guard
 → 200 { "released":true,  "sanitized_text":"…", "reason":"clean" }
 → 200 { "released":false, "sanitized_text":null, "reason":"Verifier blockiert: IP-Adresse: …" }
 ```
-Bei `released=true` dispatcht **der Konsument** `sanitized_text` selbst an das PrismClaw-Gateway.
+Bei `released=true` dispatcht Sluice `sanitized_text` selbst über den Provider-Adapter (§7.3);
+alternativ kann der Konsument nur den Guard nutzen und selbst dispatchen (Guard-only-Call).
 Blockt der Guard → lokale, eskalierte Nicht-Diagnose (Mensch übernimmt).
 
 ### 7.2 Pseudonymizing = proxy-vermittelt (transparenter Endpoint)
 Sluice sitzt **inline** als OpenAI-/Responses-kompatibler Endpoint. Der Konsument (Aider)
 zeigt einfach auf Sluices URL und weiß nichts von Sluice. Sluice: pseudonymisiert die ganze
-Anfrage → verifiziert → forwarded ans Gateway → **reverst den Antwort-Stream** (inkl.
-Tool-Arg-Reversal). Entspricht PrismClaws heutigem `anon`-im-Client, herausgehoben.
+Anfrage → verifiziert → ruft den Provider-Adapter (§7.3) → **reverst den Antwort-Stream**
+(inkl. Tool-Arg-Reversal). Entspricht PrismClaws heutigem `anon`-im-Client, herausgehoben.
 
 ```
-POST /v1/responses        (bzw. /v1/chat/completions — derselbe Dialekt wie openclaude-Edge)
+POST /v1/chat/completions
   Header: X-Sluice-Profile: aider-code
-  Body:   { "input":[…echte Daten…], "stream":true, "tools":[…] }
+          X-Sluice-Scope:   <session-id>       (optional; Mapping-Scope §8, default "global")
+  Body:   { "messages":[…echte Daten…], "model":"…", "provider":"…", "stream":true,
+            "mode":"reversible" }
 
-Sluice-intern:  forward(scope) → verify → Gateway → stream_reverser(scope) → Tool-Args reverse
+`mode` (optional): "irreversible" (Default, Rev. 4) | "reversible" (explizites Opt-in) —
+überschreibt die Profil-Strategie für diesen Request. `provider` (optional): default ist der
+erste Eintrag der Profil-Allowlist; jede Wahl wird gegen die Allowlist geprüft (§4.1).
+
+Sluice-intern:  forward(scope) → verify → Provider-Adapter (§7.3) → stream_reverser(scope) → Tool-Args reverse
 → SSE zurück an den Konsumenten in **echten Werten**.
 ```
 
@@ -284,10 +302,24 @@ Sluice-intern:  forward(scope) → verify → Gateway → stream_reverser(scope)
 2. **Tool-Call-Passthrough** — Tool-Argumente müssen vor Ausführung zurückgemappt werden
    (`reverse_obj`), sonst bekommt das lokale Tool Pseudonyme statt echter Werte.
 
-### 7.3 Provider-Adapter generisch
-Neuer Provider = ein Adapter hinter demselben Verifier/Gate. Weil Sanitisierung *vor* der
-Provider-Auswahl passiert, ist Sluice der Provider egal. Das Routing selbst bleibt im
-PrismClaw-Gateway (§1). Die Allowlist (§4.1) begrenzt pro Profil, welche erlaubt sind.
+### 7.3 Provider-Adapter in Sluice (Revision 2)
+Sluice spricht die Provider direkt an. Ein Adapter pro Provider hinter demselben
+Verifier/Gate; neuer Provider = ein weiterer Adapter, ohne Guard/Verifier/Audit anzufassen.
+Die Allowlist (§4.1) begrenzt pro Profil, welche erlaubt sind.
+
+- **v1-Adapter:** `anthropic` (Claude), `openai`, `gemini`, `mistral`. OpenAI und Mistral
+  teilen den Chat-Completions-Dialekt (gemeinsame Basis-Klasse).
+- **Reihenfolge zwingend:** Der Adapter wird ausschließlich vom Dispatch aufgerufen,
+  *nachdem* `guarded_egress` released hat — nie mit unverifiziertem Text (Invariante 2).
+- **API-Keys:** per Env-Variable (`SLUICE_ANTHROPIC_API_KEY`, `SLUICE_OPENAI_API_KEY`,
+  `SLUICE_GEMINI_API_KEY`, `SLUICE_MISTRAL_API_KEY`). Nie im Profil-TOML, nie im Audit-Log.
+  Fehlender Key ⇒ fail-closed (Fehler, kein stiller Fallback auf anderen Provider).
+- **Timeouts:** endlicher Connect-Timeout, **kein Read-Timeout** (agentische Turns streamen
+  lange) — wie im übrigen Code.
+- **Antwortpfad:** bei `pseudonymizing` läuft die Provider-Antwort durch `reverse_text` /
+  `stream_reverser` / `reverse_obj` derselben Strategie-Instanz (Scope-Konsistenz, §8).
+- **Failover/Health/Tenant-Order:** *(post-v1)* — v1 ruft genau den einen per Profil
+  erlaubten und vom Konsumenten gewählten Provider.
 
 ### 7.4 Versionierte Schnittstelle (ab v1 Pflicht)
 Sluice ist ab jetzt eine **Abhängigkeit mit Vertrag** — ein Breaking Change trifft alle
@@ -361,7 +393,7 @@ ihnen operieren.
 - **Genericity-Check** (§5.2, Re-ID durch Kombination) — *(post-v1)*.
 - **Format-preserving Strategy** fürs Bank-Tool als dritte `SanitizationStrategy` — *(post-v1)*.
 - **`egress_log`-Persistenz** über reines Logging hinaus — *(post-v1)*.
-- **mTLS Sluice ↔ Gateway** als Härtung (heute VLAN-firewalled) — *(post-v1)*.
+- **mTLS Konsument ↔ Sluice** als Härtung (heute VLAN-firewalled) — *(post-v1)*.
 - **Bank-Tool-Lesezugriff** (FinTS/HBCI/Aggregator) ist eine *separate* Sicherheitsfläche,
   **nicht** Teil von Sluice — nur der Vollständigkeit halber genannt.
 
@@ -372,7 +404,7 @@ ihnen operieren.
 | Projekt | Rolle ggü. Sluice | Strategie | Integrationsform |
 |---|---|---|---|
 | **Sluice** | *ist* die Boundary | — | — |
-| **PrismClaw** | Routing-Gateway dahinter **+** Konsument (verliert eingebackene `anon`) | — / pseudonymizing | Proxy (§7.2) |
+| **PrismClaw** | Konsument (verliert eingebackene `anon`; Gateway-Rolle entfällt mit Revision 2, §7.3) | — / pseudonymizing | Proxy (§7.2) |
 | **Temper** | Konsument | generalizing | Guard-Call (§7.1) |
 | **Crate** | künftiger Konsument | generalizing | Guard-Call (§7.1) |
 | **Aider/Code** | Konsument | **pseudonymizing** (Opt-in) | Proxy (§7.2) |

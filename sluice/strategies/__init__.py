@@ -4,10 +4,10 @@ Der Schalter wählt eine *Strategie-Implementierung*, kein `if reversible:` im G
 Die drei Invarianten (Profil-Gate, Verifier, Audit) verändert er NIE — er tauscht
 nur das Strategie-Objekt (Spec §2).
 
-- `GeneralizingStrategy` — reversible=False, DEFAULT. Einbahnstraße.
-- `PseudonymizingStrategy` — reversible=True, explizites Opt-in: die schwächere
-  DSGVO-Zusage (Mapping-Tabelle bleibt personenbezogen) und führt Zustand ein —
-  nie geerbt, immer bewusst deklariert.
+- `GeneralizingStrategy` — reversible=False, DEFAULT (Rev. 4, safety first). Einbahnstraße.
+- `PseudonymizingStrategy` — reversible=True, explizites Opt-in per Profil oder
+  Request-`mode: "reversible"` (§7.2): die schwächere DSGVO-Zusage (Mapping-Tabelle
+  bleibt personenbezogen) und führt Zustand ein — nie geerbt, immer bewusst deklariert.
 
 Ein späteres drittes Verfahren (format-preserving, post-v1) ist einfach eine weitere
 `SanitizationStrategy` hinter demselben Schalter — ohne Guard/Verifier/Audit anzufassen.
@@ -103,7 +103,10 @@ def select_strategy(profile: Profile) -> SanitizationStrategy:
     from sluice.strategies.generalizing import GeneralizingStrategy
     from sluice.strategies.pseudonymizing import PseudonymizingStrategy
 
-    cached = _instances.get(profile.name)
+    # Cache-Key enthält die Strategie: ein Request-`mode`-Override (§7.2) desselben
+    # Profils darf nie die Instanz des anderen Modus erwischen.
+    cache_key = f"{profile.name}:{profile.strategy}"
+    cached = _instances.get(cache_key)
     if cached is not None:
         return cached
 
@@ -118,7 +121,7 @@ def select_strategy(profile: Profile) -> SanitizationStrategy:
     else:  # fail-closed: unbekannte Strategie ist ein Konfigurationsfehler
         raise ValueError(f"Unbekannte Strategie '{profile.strategy}' in Profil '{profile.name}'.")
 
-    _instances[profile.name] = strategy
+    _instances[cache_key] = strategy
     return strategy
 
 

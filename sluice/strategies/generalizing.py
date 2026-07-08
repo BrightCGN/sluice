@@ -21,17 +21,23 @@ class GeneralizingStrategy:
     name = "generalizing"
 
     async def forward(self, payload: EgressPayload, scope: Scope | None) -> Sanitized:
-        """Reicht den generalisierten Konsumenten-Text als Egress-Kandidaten durch.
+        """Reicht den generalisierten Konsumenten-Inhalt als Egress-Kandidaten durch.
 
-        Fail-closed: ohne generalisierten Text gibt es keinen Kandidaten — Fehler,
-        nicht stiller Durchlass des Rohtexts.
+        Proxy-Form (§7.2, mode=irreversible): auch Messages sind zulässig — sie gelten
+        als vom Konsumenten bereits generalisiert und laufen unverändert in den
+        Verifier; rohe Identifier blockt der Riegel (Invariante 2).
+
+        Fail-closed: ohne generalisierten Text/Messages gibt es keinen Kandidaten —
+        Fehler, nicht stiller Durchlass des Rohtexts.
         """
-        if payload.generalized_text is None:
-            raise ValueError(
-                "GeneralizingStrategy braucht payload.generalized_text — die semantische "
-                "Generalisierung macht der Konsument (§1.1), Sluice verifiziert nur."
-            )
-        return Sanitized(text=payload.generalized_text)
+        if payload.generalized_text is not None:
+            return Sanitized(text=payload.generalized_text)
+        if payload.messages is not None:
+            return Sanitized(messages=payload.messages)
+        raise ValueError(
+            "GeneralizingStrategy braucht payload.generalized_text oder payload.messages — "
+            "die semantische Generalisierung macht der Konsument (§1.1), Sluice verifiziert nur."
+        )
 
     async def reverse_text(self, text: str, scope: Scope) -> str:
         raise NotImplementedError("GeneralizingStrategy ist irreversibel (Einbahnstraße, §3).")

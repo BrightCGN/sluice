@@ -1,0 +1,246 @@
+"""Sluice als eigenständiger HTTP-Service (Spec §1, §7 — Revision 3).
+
+Der zentrale Service, den alle Projekte ansprechen, um mit externen KIs zu
+kommunizieren. Versionierte Schnittstelle ab Tag 1 (§7.4): alle Pfade unter `/v1/`.
+
+Endpunkte:
+- `POST /v1/egress/guard`      — Guard-only (§7.1): sanitisieren + verifizieren,
+                                 der Konsument dispatcht selbst.
+- `POST /v1/chat/completions`  — Voll-Proxy (§7.2): Gate → Strategie → Verifier →
+                                 Audit → Provider-Adapter → (reverse), inkl. SSE-Streaming.
+- `GET  /v1/health`            — Liveness.
+
+Modus (Rev. 4, safety first): Default ist **irreversibel** (generalizing). Reversibel
+(pseudonymizing) ist explizites Opt-in per Profil (`strategy`) oder pro Request
+(`mode: "reversible"`). Unbekannter `mode` ⇒ 400, fail-closed.
+
+Start: `uvicorn sluice.server:app` mit `SLUICE_PROFILES=/pfad/profile.toml`.
+Ohne Profil-Datei startet der Service mit leerer Profil-Menge — Default-Deny (§4.3):
+jeder Request wird blockiert, nichts geht still raus.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import json
+import os
+from collections.abc import Callable
+from typing import Any
+
+import structlog
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse, StreamingResponse
+from starlette.routing import Route
+
+from sluice.audit import AuditLog
+from sluice.dispatch import guarded_completion, guarded_stream
+from sluice.guard import guarded_egress
+from sluice.policy import Profile, load_profiles
+from sluice.providers import (
+    ProviderAdapter,
+    ProviderConfigError,
+    ProviderError,
+    select_provider,
+)
+from sluice.strategies import EgressPayload, Scope
+
+log = structlog.get_logger("sluice.server")
+
+# Request-`mode` (§7.2, Rev. 3) → Strategie-Name. Fail-closed: alles andere ist 400.
+_MODES = {
+    "reversible": "pseudonymizing",
+    "irreversible": "generalizing",
+    "pseudonymizing": "pseudonymizing",
+    "generalizing": "generalizing",
+}
+
+
+def _bad_request(reason: str) -> JSONResponse:
+    return JSONResponse({"error": {"type": "sluice_bad_request", "reason": reason}}, status_code=400)
+
+
+def _blocked(reason: str) -> JSONResponse:
+    return JSONResponse({"error": {"type": "sluice_blocked", "reason": reason}}, status_code=403)
+
+
+def _effective_profile(profile: Profile, mode: str | None) -> Profile | JSONResponse:
+    """Wendet den Request-`mode` an (Rev. 3). Ohne `mode` gilt die Profil-Strategie."""
+    if mode is None:
+        return profile
+    strategy = _MODES.get(mode)
+    if strategy is None:
+        return _bad_request(f"Unbekannter mode '{mode}' (erlaubt: reversible | irreversible).")
+    if strategy == profile.strategy:
+        return profile
+    return dataclasses.replace(profile, strategy=strategy)
+
+
+def _raw_text(messages: list[dict[str, Any]]) -> str:
+    """Alle Textinhalte — das reviewbare „Vorher" fürs Audit (§6)."""
+    return "\n".join(
+        m["content"] for m in messages if isinstance(m.get("content"), str)
+    )
+
+
+def create_app(
+    profiles: dict[str, Profile] | None = None,
+    *,
+    profiles_path: str | None = None,
+    adapter_factory: Callable[[str], ProviderAdapter] = select_provider,
+    audit: AuditLog | None = None,
+) -> Starlette:
+    """App-Factory. Profil-Quelle: Argument > `profiles_path` > Env `SLUICE_PROFILES` > leer.
+
+    Leer heißt Default-Deny (§4.3) — der Service startet, blockiert aber jeden Egress.
+    adapter_factory/audit sind Injektionspunkte für Tests (kein Netz, §Test-Disziplin).
+    """
+    if profiles is None:
+        path = profiles_path or os.environ.get("SLUICE_PROFILES", "")
+        if path:
+            profiles = load_profiles(path)
+        else:
+            profiles = {}
+            log.warning("server.no_profiles", hint="SLUICE_PROFILES nicht gesetzt → Default-Deny")
+
+    resolved: dict[str, Profile] = profiles
+
+    async def health(_: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok", "profiles": len(resolved)})
+
+    async def egress_guard(request: Request) -> JSONResponse:
+        """Guard-only (§7.1): Antwort immer 200, `released` trägt die Entscheidung."""
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return _bad_request("Body ist kein gültiges JSON.")
+
+        profile = resolved.get(body.get("profile", ""))
+        outcome = await guarded_egress(
+            profile=profile,
+            purpose=body.get("purpose", ""),
+            payload=EgressPayload(
+                raw_text=body.get("raw_text", ""),
+                generalized_text=body.get("generalized_text"),
+                messages=body.get("messages"),
+            ),
+            scope=Scope(key=body["scope"]) if body.get("scope") else None,
+            provider_target=body.get("provider"),
+            audit=audit,
+        )
+        return JSONResponse(
+            {
+                "released": outcome.released,
+                "sanitized_text": outcome.sanitized_text,
+                "sanitized_messages": outcome.sanitized_messages,
+                "reason": outcome.reason,
+            }
+        )
+
+    async def chat_completions(request: Request) -> JSONResponse | StreamingResponse:
+        """Voll-Proxy (§7.2): der eine zentrale Weg zu den externen KIs."""
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return _bad_request("Body ist kein gültiges JSON.")
+
+        messages = body.get("messages")
+        model = body.get("model")
+        if not isinstance(messages, list) or not messages or not model:
+            return _bad_request("Pflichtfelder: messages (nicht leer) und model.")
+
+        # Profil aus dem Header; unbekannt/fehlend läuft als None in den Guard → Default-Deny.
+        profile = resolved.get(request.headers.get("X-Sluice-Profile", ""))
+
+        effective: Profile | None = None
+        if profile is not None:
+            result = _effective_profile(profile, body.get("mode"))
+            if isinstance(result, JSONResponse):
+                return result
+            effective = result
+
+        # Konsumenten müssen sich nicht kümmern (Rev. 3): purpose/provider defaulten auf
+        # den ersten Profil-Eintrag; jede Wahl wird trotzdem im Guard geprüft (§4.1).
+        purpose = body.get("purpose") or (
+            effective.allowed_purposes[0] if effective and effective.allowed_purposes else ""
+        )
+        provider_target = body.get("provider") or (
+            effective.provider_allowlist[0] if effective and effective.provider_allowlist else ""
+        )
+
+        scope_key = request.headers.get("X-Sluice-Scope")
+        scope = Scope(key=scope_key) if scope_key else None
+        payload = EgressPayload(raw_text=_raw_text(messages), messages=messages)
+        common: dict[str, Any] = {
+            "profile": effective,
+            "purpose": purpose,
+            "payload": payload,
+            "provider_target": provider_target,
+            "model": model,
+            "scope": scope,
+            "max_tokens": int(body.get("max_tokens", 1024)),
+            "audit": audit,
+        }
+
+        try:
+            adapter = adapter_factory(provider_target) if provider_target else None
+        except ProviderConfigError as exc:
+            return JSONResponse(
+                {"error": {"type": "sluice_provider_config", "reason": str(exc)}}, status_code=500
+            )
+
+        try:
+            if body.get("stream"):
+                stream_outcome = await guarded_stream(adapter=adapter, **common)
+                if not stream_outcome.released or stream_outcome.chunks is None:
+                    return _blocked(stream_outcome.reason)
+
+                async def sse() -> Any:
+                    async for chunk in stream_outcome.chunks:
+                        event = {
+                            "object": "chat.completion.chunk",
+                            "model": model,
+                            "choices": [{"index": 0, "delta": {"content": chunk}}],
+                        }
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    yield "data: [DONE]\n\n"
+
+                return StreamingResponse(sse(), media_type="text/event-stream")
+
+            outcome = await guarded_completion(adapter=adapter, **common)
+            if not outcome.released:
+                return _blocked(outcome.reason)
+            return JSONResponse(
+                {
+                    "object": "chat.completion",
+                    "model": outcome.model,
+                    "provider": outcome.provider,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": outcome.response_text},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                }
+            )
+        except ProviderConfigError as exc:
+            return JSONResponse(
+                {"error": {"type": "sluice_provider_config", "reason": str(exc)}}, status_code=500
+            )
+        except ProviderError as exc:
+            return JSONResponse(
+                {"error": {"type": "sluice_provider_upstream", "reason": str(exc)}}, status_code=502
+            )
+
+    return Starlette(
+        routes=[
+            Route("/v1/health", health, methods=["GET"]),
+            Route("/v1/egress/guard", egress_guard, methods=["POST"]),
+            Route("/v1/chat/completions", chat_completions, methods=["POST"]),
+        ]
+    )
+
+
+# Für `uvicorn sluice.server:app` — Profile aus SLUICE_PROFILES, sonst Default-Deny.
+app = create_app()

@@ -33,7 +33,7 @@ class Profile:
     """Ein Konsumenten-Profil — der Schalter, maschinenlesbar (Spec §4)."""
 
     name: str
-    strategy: str = "generalizing"  # Default; pseudonymizing nur per explizitem Opt-in (§2)
+    strategy: str = "generalizing"  # Default (Rev. 4, safety first); pseudonymizing = Opt-in (§2)
     egress_enabled: bool = True
     allowed_purposes: tuple[str, ...] = ()
     provider_allowlist: tuple[str, ...] = ()
@@ -89,7 +89,7 @@ def parse_profiles(toml_text: str) -> dict[str, Profile]:
     data = tomllib.loads(toml_text)
     profiles: dict[str, Profile] = {}
     for name, raw in data.get("profile", {}).items():
-        strategy = raw.get("strategy", "generalizing")
+        strategy = raw.get("strategy", "generalizing")  # Default irreversibel (Rev. 4, §2)
         if strategy not in VALID_STRATEGIES:
             raise ValueError(f"Profil '{name}': unbekannte Strategie '{strategy}'.")
 

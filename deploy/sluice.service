@@ -1,0 +1,63 @@
+# Sluice — systemd-Unit für die Sluice-VM (ID 8740, 192.168.87.40).
+#
+# Installation:
+#   1. Repo nach /opt/sluice, venv anlegen:  python3.11 -m venv /opt/sluice/.venv
+#      && /opt/sluice/.venv/bin/pip install /opt/sluice
+#   2. Service-User:      useradd --system --home /opt/sluice --shell /usr/sbin/nologin sluice
+#   3. Konfiguration:     /etc/sluice/profiles.toml   (Profil-Schema, Spec §4)
+#                         /etc/sluice/sluice.env      (Provider-Keys; chmod 600, Eigentümer root)
+#   4. Unit installieren: cp deploy/sluice.service /etc/systemd/system/
+#                         systemctl daemon-reload && systemctl enable --now sluice
+#   5. Prüfen:            curl http://192.168.87.40:8000/v1/health
+#
+# Fail-closed by design: ohne profiles.toml startet der Service im Default-Deny (§4.3)
+# und blockiert jeden Egress — er geht dadurch NICHT kaputt, er lässt nur nichts raus.
+
+[Unit]
+Description=Sluice — Sanitisierungs-Boundary (Egress-Guard + Provider-Proxy, /v1)
+Documentation=https://github.com/BrightCGN/sluice
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=sluice
+Group=sluice
+WorkingDirectory=/opt/sluice
+
+# Profile (Spec §4) + Provider-Keys (Spec §7.3: SLUICE_<PROVIDER>_API_KEY, nie im Repo).
+Environment=SLUICE_PROFILES=/etc/sluice/profiles.toml
+EnvironmentFile=/etc/sluice/sluice.env
+
+ExecStart=/opt/sluice/.venv/bin/uvicorn sluice.server:app --host 192.168.87.40 --port 8000
+Restart=on-failure
+RestartSec=2
+
+# --- Prozess-Härtung: die Boundary-VM ist Teil der Souveränitäts-Story -----------------
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

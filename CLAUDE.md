@@ -11,8 +11,9 @@ nachfragen statt raten.
 
 Die **eine gemeinsame Sanitisierungs-Boundary**, durch die jeder ausgehende Datenpfad aller
 Projekte läuft, bevor er die Kundengrenze überquert. Eigenständiger Dienst, eigener
-Lebenszyklus. Sitzt **vor** dem PrismClaw-Routing-Gateway (`openclaude/gateway`), nicht darin —
-Sluice sanitisiert, das Gateway routet/failovert. Konsumenten binden ein dünnes Client-SDK ein.
+Lebenszyklus. Seit **Spec-Revision 2 (2026-07-08)** spricht Sluice die Provider (Claude,
+OpenAI, Gemini, Mistral) **selbst** über Adapter an (§7.3) — das PrismClaw-Gateway liegt nicht
+mehr im Pfad. Konsumenten binden ein dünnes Client-SDK ein.
 
 Sluice ist das DSGVO-Argument in Code-Form: **eine** Policy, **ein** Audit-Log, **ein**
 deterministischer Riegel, auf den bei einer Prüfung gezeigt wird.
@@ -44,8 +45,9 @@ Sluice undicht oder nicht wiederverwendbar. **Nicht selbst raten — gegen die S
 - **Beim Konsumenten (Domäne/Policy):** die **semantische Generalisierung** (aus einem
   validierten Fix die übertragbare Lektion machen — das ist Temper-Businesslogik, nicht Sluice),
   die konkreten Detektor-**Muster** (als Profil deklariert), die Provider-Allowlist.
-- **Nicht in Sluice:** Provider-Routing/Failover/Health (bleibt PrismClaw-Gateway),
-  Upstream-Provider-API-Keys (bleiben im Gateway, per Tenant).
+- **Seit Revision 2 in Sluice:** Provider-Adapter (anthropic/openai/gemini/mistral, §7.3)
+  inkl. API-Keys per Env — Adapter werden **nur nach `released=true`** aufgerufen, nie davor.
+- **Nicht in Sluice (post-v1 offen):** Failover/Health/Tenant-Order-Routing.
 
 Wenn Domänenlogik „mal eben" nach Sluice greifen will: **das ist das Signal zu stoppen**, nicht
 weiterzumachen.
@@ -56,11 +58,12 @@ weiterzumachen.
 
 `SanitizationStrategy` (Protocol) mit zwei Implementierungen, profilgewählt:
 
-- **`GeneralizingStrategy`** — `reversible=False`, **DEFAULT**. Einbahnstraße: `forward()` nur.
-  Reverse-Methoden werfen `NotImplementedError`. Herkunft: Tempers `egress/`-Datenfluss.
-- **`PseudonymizingStrategy`** — `reversible=True`, **explizites Opt-in**. forward + reverse +
-  `stream_reverser` (Holdback-Puffer) + `reverse_obj` (Tool-Args) + Mapping-Lebenszyklus.
-  Herkunft: PrismClaws `prismclaw.anon`.
+- **`GeneralizingStrategy`** — `reversible=False`, **DEFAULT (Spec-Revision 4, safety
+  first)**. Einbahnstraße: `forward()` nur; Reverse-Methoden werfen `NotImplementedError`.
+  Herkunft: Tempers `egress/`-Datenfluss.
+- **`PseudonymizingStrategy`** — `reversible=True`, **explizites Opt-in** (per Profil oder
+  Request-`mode: "reversible"`). forward + reverse + `stream_reverser` (Holdback-Puffer) +
+  `reverse_obj` (Tool-Args) + Mapping-Lebenszyklus. Herkunft: PrismClaws `prismclaw.anon`.
 
 Reversibel ist die schwächere DSGVO-Zusage (Mapping-Tabelle bleibt personenbezogen) und führt
 Zustand ein — daher **nie geerbt, immer bewusst deklariert**.
@@ -80,6 +83,15 @@ sluice/
     generalizing.py      # forward-only
     pseudonymizing.py    # forward + reverse + stream_reverser + reverse_obj + scope/TTL
   detectors/             # Muster-Sets: infra, code, media, financial
+  dispatch.py            # guarded_completion: Guard → Provider-Adapter → (reverse)
+  server.py              # eigenständiger HTTP-Service: /v1/egress/guard + /v1/chat/completions
+  providers/
+    __init__.py          # ProviderAdapter (Protocol) + Registry, Keys per Env
+    anthropic.py         # Claude (Messages-API)
+    openai_compat.py     # gemeinsamer Chat-Completions-Dialekt
+    openai.py            # OpenAI
+    mistral.py           # Mistral AI
+    gemini.py            # Google Gemini (generateContent)
 docs/
   SLUICE-BOUNDARY-SPEC.md  # Wahrheitsquelle
 tests/                   # kein Netz; httpx.MockTransport wo HTTP nötig
