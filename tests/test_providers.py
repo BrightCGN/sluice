@@ -153,3 +153,76 @@ async def test_gemini_complete_translates_roles() -> None:
     assert seen["body"]["systemInstruction"] == {"parts": [{"text": "Sei knapp."}]}
     roles = [c["role"] for c in seen["body"]["contents"]]
     assert roles == ["user", "model"]
+
+
+# ---------- Remote-Gateway (§7.3, Rev. 6): Kern → eigenständiger Gateway-Service ----------
+
+
+async def test_remote_gateway_complete_forwards_and_sends_token() -> None:
+    from sluice.providers.remote import RemoteGatewayAdapter
+
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["token"] = request.headers.get("X-Sluice-Gateway-Token")
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200, json={"text": "Hallo zurück", "model": "claude-sonnet-5", "provider": "anthropic"}
+        )
+
+    adapter = RemoteGatewayAdapter(
+        provider="anthropic",
+        base_url="http://192.168.87.40:17890",
+        token="s3cret",
+        http_client=_client(handler),
+    )
+    resp = await adapter.complete(MESSAGES, model="claude-sonnet-5")
+    assert resp.text == "Hallo zurück"
+    assert resp.provider == "anthropic"
+    assert seen["url"] == "http://192.168.87.40:17890/v1/complete"
+    assert seen["token"] == "s3cret"
+    assert seen["body"]["messages"] == MESSAGES
+
+
+async def test_remote_gateway_stream_parses_deltas_until_done() -> None:
+    from sluice.providers.remote import RemoteGatewayAdapter
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _sse('{"delta": "Hal"}', '{"delta": "lo"}', "[DONE]")
+
+    adapter = RemoteGatewayAdapter(
+        provider="openai", base_url="http://gw:17891", http_client=_client(handler)
+    )
+    chunks = [c async for c in adapter.stream(MESSAGES, model="gpt")]
+    assert chunks == ["Hal", "lo"]
+
+
+async def test_remote_gateway_config_error_stays_fail_closed() -> None:
+    from sluice.providers.remote import RemoteGatewayAdapter
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            500, json={"error": {"type": "gateway_config", "reason": "Key fehlt"}}
+        )
+
+    adapter = RemoteGatewayAdapter(
+        provider="mistral", base_url="http://gw:17893", http_client=_client(handler)
+    )
+    with pytest.raises(ProviderConfigError, match="gateway_config"):
+        await adapter.complete(MESSAGES, model="m")
+
+
+def test_select_egress_adapter_prefers_configured_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sluice.providers import select_egress_adapter
+    from sluice.providers.remote import RemoteGatewayAdapter
+
+    monkeypatch.setenv("SLUICE_GATEWAY_ANTHROPIC_URL", "http://192.168.87.40:17890")
+    adapter = select_egress_adapter("claude")  # Alias → kanonisch "anthropic"
+    assert isinstance(adapter, RemoteGatewayAdapter)
+    assert adapter.name == "anthropic"
+
+    monkeypatch.delenv("SLUICE_GATEWAY_ANTHROPIC_URL")
+    assert isinstance(select_egress_adapter("claude"), AnthropicAdapter)

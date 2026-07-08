@@ -84,7 +84,8 @@ sluice/
     pseudonymizing.py    # forward + reverse + stream_reverser + reverse_obj + scope/TTL
   detectors/             # Muster-Sets: infra, code, media, financial
   dispatch.py            # guarded_completion: Guard → Provider-Adapter → (reverse)
-  server.py              # eigenständiger HTTP-Service: /v1/egress/guard + /v1/chat/completions
+  server.py              # Kern-Service: /v1/egress/guard + /v1/chat/completions
+  gateway.py             # eigenständiger Gateway-Service, ein Prozess pro Provider (Rev. 6, Ports ab 17890)
   providers/
     __init__.py          # ProviderAdapter (Protocol) + Registry, Keys per Env
     anthropic.py         # Claude (Messages-API)
@@ -92,6 +93,7 @@ sluice/
     openai.py            # OpenAI
     mistral.py           # Mistral AI
     gemini.py            # Google Gemini (generateContent)
+    remote.py            # Kern → Gateway-Service (SLUICE_GATEWAY_<P>_URL, Rev. 6)
 docs/
   SLUICE-BOUNDARY-SPEC.md  # Wahrheitsquelle
 tests/                   # kein Netz; httpx.MockTransport wo HTTP nötig

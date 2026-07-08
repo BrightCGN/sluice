@@ -1,0 +1,70 @@
+# Sluice Provider-Gateway — Template-Unit, ein eigenständiger Service pro Provider
+# (Spec §7.3, Rev. 6). Instanzname = Provider-Name:
+#   systemctl enable --now sluice-gateway@anthropic sluice-gateway@openai \
+#                          sluice-gateway@gemini sluice-gateway@mistral
+#
+# Ein Gateway kapselt genau EINEN Provider-Adapter als eigenen Prozess mit eigenem
+# Lebenszyklus — Kern und Gateways können dadurch jederzeit auf getrennte Server
+# umziehen. Der Sluice-Kern findet ein Gateway über SLUICE_GATEWAY_<PROVIDER>_URL
+# (in /etc/sluice/sluice.env) und ruft es ausschließlich NACH released=true auf.
+#
+# Das Gateway ist ein INTERNER Dienst: eingehend nur vom Sluice-Kern erlauben
+# (Firewall), optional zusätzlich Shared Secret SLUICE_GATEWAY_TOKEN (beide Seiten).
+# Jede Instanz hält NUR den API-Key ihres eigenen Providers.
+#
+# Host, Port und Key pro Instanz: /etc/sluice/gateway-<provider>.env
+# (chmod 600, Eigentümer root). Port-Konvention (ab 17890):
+#   anthropic → 17890   openai → 17891   gemini → 17892   mistral → 17893
+#
+# Installation: siehe docs/DEPLOY.md §5.1.
+#   Prüfen: curl http://<host>:17890/v1/health → {"status":"ok","provider":"anthropic"}
+
+[Unit]
+Description=Sluice Provider-Gateway %i — eigenständiger Provider-Service (/v1)
+Documentation=https://github.com/BrightCGN/sluice
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=sluice
+Group=sluice
+WorkingDirectory=/opt/sluice
+
+# Provider dieser Instanz (Spec §7.3, Rev. 6).
+Environment=SLUICE_PROVIDER=%i
+# Host, Port + der EINE API-Key dieser Instanz (+ optional SLUICE_GATEWAY_TOKEN).
+EnvironmentFile=/etc/sluice/gateway-%i.env
+
+ExecStart=/opt/sluice/.venv/bin/uvicorn --factory sluice.gateway:app --host ${SLUICE_HOST} --port ${SLUICE_PORT}
+Restart=on-failure
+RestartSec=2
+
+# --- Prozess-Härtung: identisch zur Kern-Unit (deploy/sluice.service) -------------------
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

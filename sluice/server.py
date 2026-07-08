@@ -18,11 +18,16 @@ Start: `uvicorn sluice.server:app` mit `SLUICE_PROFILES=/pfad/profile.toml`.
 Ohne Profil-Datei startet der Service mit leerer Profil-Menge — Default-Deny (§4.3):
 jeder Request wird blockiert, nichts geht still raus.
 
-Betriebsvariante „ein Service pro Gateway" (Rev. 5, §7.3): ist `SLUICE_PROVIDER`
-gesetzt (bzw. `provider_lock` übergeben), bedient die Instanz genau diesen einen
-Provider. Requests an andere Provider ⇒ 403, fail-closed; ohne `provider` im Body
-defaultet die Instanz auf ihren Lock. Guard-Kette und Verifier bleiben unverändert —
-der Lock ist eine zusätzliche Schranke, nie eine Lockerung.
+Provider-Gateways (Rev. 6, §7.3): die Gateways sind EIGENSTÄNDIGE Services
+(`sluice/gateway.py`, Ports ab 17890, jederzeit auf getrennte Server umziehbar).
+Ist `SLUICE_GATEWAY_<PROVIDER>_URL` gesetzt, dispatcht der Kern über das jeweilige
+Gateway statt über den direkten Adapter (`select_egress_adapter`) — immer erst
+nach `released=true`.
+
+Provider-Lock (Rev. 5, optional): ist `SLUICE_PROVIDER` gesetzt (bzw. `provider_lock`
+übergeben), bedient DIESE Kern-Instanz genau einen Provider; Requests an andere ⇒ 403,
+fail-closed. Guard-Kette und Verifier bleiben unverändert — der Lock ist eine
+zusätzliche Schranke, nie eine Lockerung.
 """
 
 from __future__ import annotations
@@ -48,7 +53,7 @@ from sluice.providers import (
     ProviderConfigError,
     ProviderError,
     canonical_provider,
-    select_provider,
+    select_egress_adapter,
 )
 from sluice.strategies import EgressPayload, Scope
 
@@ -94,7 +99,7 @@ def create_app(
     profiles: dict[str, Profile] | None = None,
     *,
     profiles_path: str | None = None,
-    adapter_factory: Callable[[str], ProviderAdapter] = select_provider,
+    adapter_factory: Callable[[str], ProviderAdapter] = select_egress_adapter,
     audit: AuditLog | None = None,
     provider_lock: str | None = None,
 ) -> Starlette:

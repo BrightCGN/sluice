@@ -1,8 +1,11 @@
 # Sluice — Boundary- & Contract-Spec (v1)
 
-> **Stand:** 2026-07-08. **Revision 5:** Betriebsvariante „ein Service pro Gateway" —
-> optionaler Provider-Lock `SLUICE_PROVIDER` pro Instanz (§7.3), additive Schranke,
-> Invarianten unverändert.
+> **Stand:** 2026-07-08. **Revision 6:** Provider-Gateways sind **eigenständige
+> Services** (`sluice/gateway.py`, ein Prozess pro Provider, Ports ab **17890**),
+> jederzeit auf getrennte Server umziehbar; der Kern dispatcht über
+> `SLUICE_GATEWAY_<PROVIDER>_URL` (§7.3) — immer erst nach `released=true`.
+> **Revision 5:** optionaler Provider-Lock `SLUICE_PROVIDER` für Kern-Instanzen (§7.3),
+> additive Schranke, Invarianten unverändert.
 > **Revision 4:** Default-Modus zurück auf **generalizing
 > (irreversibel)** — safety first; die Default-Umkehr aus Revision 3 ist rückgängig.
 > Pseudonymizing bleibt explizites Opt-in (per Profil oder Request-`mode`, §2/§7.2).
@@ -323,14 +326,23 @@ Die Allowlist (§4.1) begrenzt pro Profil, welche erlaubt sind.
   `stream_reverser` / `reverse_obj` derselben Strategie-Instanz (Scope-Konsistenz, §8).
 - **Failover/Health/Tenant-Order:** *(post-v1)* — v1 ruft genau den einen per Profil
   erlaubten und vom Konsumenten gewählten Provider.
-- **Betriebsvariante „ein Service pro Gateway" (Revision 5):** derselbe Sluice-Code kann
-  als eine Instanz **pro Provider** betrieben werden (`SLUICE_PROVIDER=<name>`, systemd-Template
-  `deploy/sluice@.service`, ein Port und **nur der eigene API-Key** pro Instanz). Der Lock ist
-  eine **zusätzliche** Schranke: Requests an einen anderen Provider ⇒ 403, fail-closed; ohne
-  `provider` im Body defaultet die Instanz auf ihren Lock (Allowlist §4.1 gilt unverändert).
-  Jede Instanz führt die volle Kette Gate → Strategie → Verifier → Audit aus; alle Instanzen
-  teilen dieselbe Profil-Datei — **eine** Policy bleibt eine Policy. Kein Ersatz für die
-  Sammel-Instanz (`deploy/sluice.service`), sondern eine Deploy-Wahl.
+- **Eigenständige Gateway-Services (Revision 6):** jedes Provider-Gateway ist ein
+  **eigener Service** (`sluice/gateway.py`, systemd-Template `deploy/sluice-gateway@.service`,
+  Ports ab **17890**: anthropic 17890, openai 17891, gemini 17892, mistral 17893) mit eigenem
+  Lebenszyklus — Kern und Gateways können jederzeit auf **getrennte Server** umziehen; der
+  Kern kennt ein Gateway nur über `SLUICE_GATEWAY_<PROVIDER>_URL` und braucht dann selbst
+  **keinen Provider-Key** (Key-Isolation: jedes Gateway hält nur seinen eigenen).
+  Interner Vertrag Kern → Gateway (versioniert, §7.4): `POST /v1/complete`
+  (messages/model/max_tokens[/stream] → `{text, model, provider}` bzw. SSE
+  `data: {"delta": …}` + `[DONE]`), `GET /v1/health`.
+  **Die Boundary bleibt im Kern:** ein Gateway wird ausschließlich vom Dispatch aufgerufen,
+  *nachdem* `guarded_egress` released hat — es sieht nie Rohtext und ist **nie direkt von
+  Konsumenten erreichbar** (Firewall: eingehend nur vom Sluice-Kern; optional Shared Secret
+  `SLUICE_GATEWAY_TOKEN` auf beiden Seiten). Ohne konfigurierte Gateway-URL ruft der Kern
+  den direkten Adapter (`select_egress_adapter`) — beides hinter derselben Kette.
+- **Provider-Lock für Kern-Instanzen (Revision 5, optional):** `SLUICE_PROVIDER` beschränkt
+  eine Kern-Instanz auf genau einen Provider (fremde Provider ⇒ 403, fail-closed; Allowlist
+  §4.1 gilt unverändert) — zusätzliche Schranke, kein Ersatz für die Gateway-Services.
 
 ### 7.4 Versionierte Schnittstelle (ab v1 Pflicht)
 Sluice ist ab jetzt eine **Abhängigkeit mit Vertrag** — ein Breaking Change trifft alle

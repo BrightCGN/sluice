@@ -31,8 +31,8 @@ Konsumenten (Temper, Aider, Crate, …)          Provider (nur von dieser VM err
 | `/etc/sluice/profiles.toml` | Konsumenten-Profile (§4) | `root:sluice`, `640` |
 | `/etc/sluice/sluice.env` | Provider-API-Keys (§7.3) | `root:root`, `600` |
 | `/etc/systemd/system/sluice.service` | Unit (aus `deploy/`) | `root:root`, `644` |
-| `/etc/systemd/system/sluice@.service` | Template-Unit „ein Service pro Gateway" (optional, §5.1) | `root:root`, `644` |
-| `/etc/sluice/gateway-<provider>.env` | Port + Key je Gateway-Instanz (optional, §5.1) | `root:root`, `600` |
+| `/etc/systemd/system/sluice-gateway@.service` | Template-Unit der Provider-Gateways (§5.1) | `root:root`, `644` |
+| `/etc/sluice/gateway-<provider>.env` | Host/Port + Key je Gateway (§5.1) | `root:root`, `600` |
 
 ---
 
@@ -134,14 +134,30 @@ sudo chown root:sluice /etc/sluice/profiles.toml && sudo chmod 640 /etc/sluice/p
 Gültige Provider-Namen für die Allowlist: `anthropic` (Alias: `claude`), `openai`,
 `gemini`, `mistral`.
 
-### 4.2 Provider-Keys — `/etc/sluice/sluice.env` (§7.3)
+### 4.2 Kern-Konfiguration — `/etc/sluice/sluice.env` (§7.3)
 
 ```bash
 sudoedit /etc/sluice/sluice.env
 sudo chown root:root /etc/sluice/sluice.env && sudo chmod 600 /etc/sluice/sluice.env
 ```
 
-Inhalt (nur die Keys setzen, die Profile per Allowlist überhaupt erlauben):
+Zwei Varianten (Vorlage mit Kommentaren: `deploy/sluice.env.example`):
+
+**Variante A — Dispatch über die eigenständigen Provider-Gateways (Rev. 6, empfohlen):**
+pro Provider die Gateway-URL; der Kern braucht dann **keine** Provider-Keys — die liegen
+nur bei den Gateways (Schritt 5.1):
+
+```bash
+SLUICE_GATEWAY_ANTHROPIC_URL=http://192.168.87.40:17890
+SLUICE_GATEWAY_OPENAI_URL=http://192.168.87.40:17891
+SLUICE_GATEWAY_GEMINI_URL=http://192.168.87.40:17892
+SLUICE_GATEWAY_MISTRAL_URL=http://192.168.87.40:17893
+# optional, muss dann auch in jeder gateway-<provider>.env stehen:
+# SLUICE_GATEWAY_TOKEN=…
+```
+
+**Variante B — Kern ruft die Provider direkt** (ohne Gateway-Services); nur die Keys
+setzen, deren Provider keine Gateway-URL haben und die Profile per Allowlist erlauben:
 
 ```bash
 SLUICE_ANTHROPIC_API_KEY=sk-ant-…
@@ -178,54 +194,80 @@ sudo systemctl restart sluice
 
 (Profile werden beim Start geladen; einen Hot-Reload gibt es v1 bewusst nicht.)
 
-### 5.1 Betriebsvariante: ein eigener Service pro Gateway (§7.3, Rev. 5)
+### 5.1 Provider-Gateways: eigenständige Services (§7.3, Rev. 6)
 
-Alternativ (oder zusätzlich) zur Sammel-Instanz kann jedes Provider-Gateway als **eigener
-systemd-Service** laufen — gleiche Codebasis, Template-Unit `deploy/sluice@.service`, der
-Instanzname ist der Provider:
+Sluice-Kern und Provider-Gateways sind **getrennte Services mit eigenem Lebenszyklus** —
+jedes Gateway kann jederzeit auf einen eigenen Server umziehen, ohne dass sich für die
+Konsumenten etwas ändert. Der Kern findet ein Gateway ausschließlich über seine URL.
+
+```
+Konsumenten ──:8000──▶ sluice.service (Kern: Gate → Strategie → Verifier → Audit)
+                          │ nur nach released=true, via SLUICE_GATEWAY_<P>_URL
+                          ├──:17890──▶ sluice-gateway@anthropic ──▶ api.anthropic.com
+                          ├──:17891──▶ sluice-gateway@openai    ──▶ api.openai.com
+                          ├──:17892──▶ sluice-gateway@gemini    ──▶ generativelanguage…
+                          └──:17893──▶ sluice-gateway@mistral   ──▶ api.mistral.ai
+```
 
 | Instanz | Port | Env-Datei | Key darin |
 |---|---|---|---|
-| `sluice@anthropic` | 8001 | `/etc/sluice/gateway-anthropic.env` | `SLUICE_ANTHROPIC_API_KEY` |
-| `sluice@openai` | 8002 | `/etc/sluice/gateway-openai.env` | `SLUICE_OPENAI_API_KEY` |
-| `sluice@gemini` | 8003 | `/etc/sluice/gateway-gemini.env` | `SLUICE_GEMINI_API_KEY` |
-| `sluice@mistral` | 8004 | `/etc/sluice/gateway-mistral.env` | `SLUICE_MISTRAL_API_KEY` |
+| `sluice-gateway@anthropic` | 17890 | `/etc/sluice/gateway-anthropic.env` | `SLUICE_ANTHROPIC_API_KEY` |
+| `sluice-gateway@openai` | 17891 | `/etc/sluice/gateway-openai.env` | `SLUICE_OPENAI_API_KEY` |
+| `sluice-gateway@gemini` | 17892 | `/etc/sluice/gateway-gemini.env` | `SLUICE_GEMINI_API_KEY` |
+| `sluice-gateway@mistral` | 17893 | `/etc/sluice/gateway-mistral.env` | `SLUICE_MISTRAL_API_KEY` |
 
-Eigenschaften der Variante:
+Eigenschaften:
 
-- **Jede Instanz führt die volle Kette aus** (Gate → Strategie → Verifier → Audit). Der
-  Lock `SLUICE_PROVIDER=<instanzname>` ist eine *zusätzliche* Schranke: Requests an einen
-  anderen Provider beantwortet die Instanz mit 403, fail-closed. Der Verifier wird nie gelockert.
-- **Key-Isolation:** jede Instanz hält nur ihren eigenen API-Key — ein kompromittierter
-  Gateway-Prozess kennt die anderen Keys nicht.
-- **Eine Policy bleibt eine Policy:** alle Instanzen lesen dieselbe
-  `/etc/sluice/profiles.toml`; die Allowlist (§4.1) gilt unverändert.
-- **Bequemer Default:** lässt der Konsument `provider` im Body weg, nimmt die Instanz
-  automatisch ihren eigenen Provider — der Konsument wählt das Gateway über den Port.
+- **Die Boundary bleibt im Kern.** Ein Gateway wird nur vom Sluice-Dispatch aufgerufen,
+  *nachdem* der Verifier released hat — es sieht nie Rohtext. Deshalb: Gateways sind
+  **interne Dienste**, eingehend nur vom Sluice-Kern erreichbar (Firewall), **nie** direkt
+  von Konsumenten. Optional zusätzlich Shared Secret `SLUICE_GATEWAY_TOKEN` (beide Seiten).
+- **Key-Isolation:** jedes Gateway hält nur den Key seines Providers; der Kern braucht
+  bei dieser Variante **gar keine** Provider-Keys mehr.
+- **Umzugsfähig:** zieht ein Gateway auf einen eigenen Server, ändern sich nur
+  `SLUICE_HOST` in dessen `gateway-<provider>.env` und die `SLUICE_GATEWAY_<P>_URL`
+  in der `sluice.env` des Kerns — sonst nichts.
 
-Installation:
+**Installation der Gateways** (zunächst auf derselben VM 8740):
 
 ```bash
-sudo cp /opt/sluice/deploy/sluice@.service /etc/systemd/system/
+sudo cp /opt/sluice/deploy/sluice-gateway@.service /etc/systemd/system/
 for p in anthropic openai gemini mistral; do
   sudo cp /opt/sluice/deploy/gateway-$p.env.example /etc/sluice/gateway-$p.env
-  sudoedit /etc/sluice/gateway-$p.env    # Key eintragen (Port ist vorbelegt, s. Tabelle)
+  sudoedit /etc/sluice/gateway-$p.env    # Key eintragen (Host/Port sind vorbelegt)
   sudo chown root:root /etc/sluice/gateway-$p.env && sudo chmod 600 /etc/sluice/gateway-$p.env
 done
 sudo systemctl daemon-reload
-sudo systemctl enable --now sluice@anthropic sluice@openai sluice@gemini sluice@mistral
+sudo systemctl enable --now sluice-gateway@anthropic sluice-gateway@openai \
+                            sluice-gateway@gemini sluice-gateway@mistral
 ```
 
-Prüfen (jede Instanz meldet ihren Lock):
+**Kern auf die Gateways zeigen lassen** — in `/etc/sluice/sluice.env` (statt der Keys):
 
 ```bash
-curl -s http://192.168.87.40:8001/v1/health
-# → {"status":"ok","profiles":2,"provider_lock":"anthropic"}
+SLUICE_GATEWAY_ANTHROPIC_URL=http://192.168.87.40:17890
+SLUICE_GATEWAY_OPENAI_URL=http://192.168.87.40:17891
+SLUICE_GATEWAY_GEMINI_URL=http://192.168.87.40:17892
+SLUICE_GATEWAY_MISTRAL_URL=http://192.168.87.40:17893
 ```
 
-Nur die Gateways aktivieren, deren Provider auch in mindestens einer Allowlist stehen.
-Firewall-Hinweis: bei dieser Variante in Schritt 6 die Ports 8001–8004 statt (oder neben)
-8000 freigeben. Betrieb/Logs je Instanz: `journalctl -u sluice@anthropic -f`.
+Danach `sudo systemctl restart sluice`. Prüfen:
+
+```bash
+curl -s http://192.168.87.40:17890/v1/health
+# → {"status":"ok","provider":"anthropic"}
+```
+
+Nur die Gateways aktivieren, deren Provider in mindestens einer Allowlist stehen.
+Provider ohne Gateway-URL ruft der Kern weiterhin direkt (dann braucht er deren Key).
+Betrieb/Logs je Gateway: `journalctl -u sluice-gateway@anthropic -f`.
+
+**Umzug eines Gateways auf einen eigenen Server:** Schritte 1–3 dieses Dokuments auf dem
+neuen Server wiederholen (User, Code, venv — Profile braucht ein Gateway nicht), nur die
+eine `gateway-<provider>.env` mit angepasstem `SLUICE_HOST` anlegen, Gateway starten,
+im Kern die `SLUICE_GATEWAY_<P>_URL` umstellen, `systemctl restart sluice`. Firewall:
+Gateway-Port eingehend nur von der Sluice-Kern-IP; ausgehend 443 nur zum eigenen
+Provider-Host (Tabelle in Schritt 6).
 
 ---
 
@@ -235,8 +277,10 @@ Netzwerkseitig wird das DSGVO-Argument (§1) erst rund: **nur** diese VM darf zu
 Provider-APIs hinaus, und hinein darf nur der Perimeter.
 
 Eingehend:
-- TCP `8000` **nur** aus dem internen Netz der Konsumenten (z. B. `192.168.87.0/24`);
-  bei der Gateway-Variante (§5.1) entsprechend `8001–8004`.
+- TCP `8000` **nur** aus dem internen Netz der Konsumenten (z. B. `192.168.87.0/24`).
+- Gateway-Ports `17890–17893` **nur** von der IP des Sluice-Kerns (solange beide auf
+  derselben VM laufen, reicht localhost/VM-intern) — Konsumenten sprechen **nie** direkt
+  mit einem Gateway (§5.1).
 - SSH nach eigenem Admin-Standard.
 
 Ausgehend (Ziel-Hosts der Adapter, jeweils TCP 443):
@@ -362,6 +406,7 @@ in-memory mit TTL, §8 — ein Neustart verwirft sie absichtlich).
 | 403 „Verifier blockiert: …" | Roher Identifier im Egress-Kandidaten | **Kein Sluice-Fehler — der Riegel arbeitet.** Konsument muss besser generalisieren, oder reversiblen Modus (Opt-in) nutzen |
 | 500 `sluice_provider_config` | API-Key fehlt / Provider-Name unbekannt | `sluice.env` prüfen, Service neu starten |
 | 502 `sluice_provider_upstream` | Provider-API down oder Key ungültig | `journalctl` zeigt den HTTP-Status des Providers; Key/Status-Seite des Providers prüfen |
+| 502 mit `gateway …` in der reason | Gateway-Service down / URL falsch / Token-Mismatch | `systemctl status sluice-gateway@<p>`; `SLUICE_GATEWAY_<P>_URL` und `SLUICE_GATEWAY_TOKEN` auf beiden Seiten prüfen |
 | Service startet nicht | Python < 3.11, venv kaputt, Port belegt | `journalctl -u sluice -n 50`; `ss -tlnp | grep 8000` |
 
 **Grundsatz bei jeder Störung:** Sluice ist fail-closed. Jeder Fehlerpfad blockiert, statt
