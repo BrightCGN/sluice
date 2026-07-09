@@ -49,7 +49,8 @@ Sluice undicht oder nicht wiederverwendbar. **Nicht selbst raten — gegen die S
   inkl. API-Keys per Env — Adapter werden **nur nach `released=true`** aufgerufen, nie davor.
   **Seit Revision 7 verbindlich:** der Kern ruft Provider **nie direkt** — nur über die
   eigenständigen Gateway-Services (`SLUICE_GATEWAY_<PROVIDER>_URL` Pflicht, fehlende URL ⇒
-  fail-closed); Provider-Keys liegen ausschließlich bei den Gateways.
+  fail-closed); Provider-Keys liegen ausschließlich bei den Gateways. Jedes Gateway läuft
+  unter seinem eigenen System-User `sluice-gw-<provider>` (Rev. 8, User-Isolation).
 - **Nicht in Sluice (post-v1 offen):** Failover/Health/Tenant-Order-Routing.
 
 Wenn Domänenlogik „mal eben" nach Sluice greifen will: **das ist das Signal zu stoppen**, nicht

@@ -1,6 +1,9 @@
 # Sluice — Boundary- & Contract-Spec (v1)
 
-> **Stand:** 2026-07-09. **Revision 7:** Gateway-Pflicht — der Kern erreicht Provider
+> **Stand:** 2026-07-09. **Revision 8:** User-Isolation — jedes Provider-Gateway läuft
+> unter seinem **eigenen System-User** `sluice-gw-<provider>` (systemd `User=sluice-gw-%i`,
+> §7.3); kein Gateway kann Dateien/Keys eines anderen oder des Kerns lesen.
+> **Revision 7:** Gateway-Pflicht — der Kern erreicht Provider
 > **ausschließlich** über die Gateway-Services; der direkte Adapter-Fallback aus
 > Revision 6 entfällt. Fehlende `SLUICE_GATEWAY_<PROVIDER>_URL` ⇒ fail-closed
 > Konfigurationsfehler (§7.3). Der Kern hält keine Provider-Keys mehr (Key-Isolation).
@@ -353,6 +356,12 @@ Die Allowlist (§4.1) begrenzt pro Profil, welche erlaubt sind.
   kann keinen Egress zu einem Provider ausführen — pro genutztem Provider muss die
   zugehörige `sluice-gateway@<provider>`-Instanz laufen (Trennung der Lebenszyklen
   ist damit erzwungen, nicht nur möglich).
+- **User-Isolation (Revision 8):** jede Gateway-Instanz läuft unter ihrem **eigenen
+  System-User** `sluice-gw-<provider>` (Template-Unit: `User=sluice-gw-%i`), der Kern
+  unter `sluice`. Damit ist die Key-Isolation auch auf OS-Ebene durchgesetzt: kein
+  Gateway kann Prozesse, Dateien oder Env eines anderen Gateways (oder des Kerns)
+  lesen, und beim Umzug eines Gateways auf einen eigenen Server wandert genau dieser
+  eine User mit — das Betriebsmodell ändert sich beim Split nicht.
 - **Provider-Lock für Kern-Instanzen (Revision 5, optional):** `SLUICE_PROVIDER` beschränkt
   eine Kern-Instanz auf genau einen Provider (fremde Provider ⇒ 403, fail-closed; Allowlist
   §4.1 gilt unverändert) — zusätzliche Schranke, kein Ersatz für die Gateway-Services.

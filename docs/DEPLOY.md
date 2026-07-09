@@ -26,7 +26,8 @@ Konsumenten (Temper, Aider, Crate, …)          Provider (nur von den Gateways 
 │  systemd: sluice.service (Kern — keine Provider-Keys)                         │
 │    └─ uvicorn sluice.server:app  (User: sluice, gehärtet, fail-closed)        │
 │  systemd: sluice-gateway@<provider>  (je Provider, Ports ab 17890, §5.1)      │
-│    └─ uvicorn sluice.gateway:app  (hält NUR den Key seines Providers)         │
+│    └─ uvicorn sluice.gateway:app  (eigener User sluice-gw-<provider>,         │
+│                                    hält NUR den Key seines Providers)         │
 │  /opt/sluice          Code + venv                                             │
 │  /etc/sluice          profiles.toml (§4) + sluice.env (Gateway-URLs, §7.3)    │
 │                       + gateway-<provider>.env (je ein Provider-Key)          │
@@ -62,10 +63,18 @@ python3 --version    # muss ≥ 3.11 sein
 
 ## 2. Service-User anlegen
 
-Eigener System-User ohne Login-Shell — der Service läuft nie als root:
+Eigene System-User ohne Login-Shell — kein Service läuft als root, und **jedes Gateway
+läuft unter seinem eigenen User** (Rev. 8): User-Isolation zusätzlich zur
+Prozess-Isolation — kein Gateway kann Dateien oder Speicher eines anderen (oder des
+Kerns) lesen, und beim Umzug auf einen eigenen Server wandert genau ein User mit.
 
 ```bash
+# Kern:
 sudo useradd --system --home /opt/sluice --shell /usr/sbin/nologin sluice
+# Ein User pro Gateway (nur die anlegen, deren Gateway auf diesem Server läuft):
+for p in anthropic openai gemini mistral; do
+  sudo useradd --system --home /opt/sluice --shell /usr/sbin/nologin sluice-gw-$p
+done
 ```
 
 ---
@@ -92,6 +101,9 @@ sudo python3 -m venv /opt/sluice/.venv
 sudo /opt/sluice/.venv/bin/pip install /opt/sluice
 sudo chown -R sluice:sluice /opt/sluice
 ```
+
+`/opt/sluice` muss für „other" lesbar bleiben (Standard-Umask, o+rX) — die Gateways
+laufen unter eigenen Usern (Rev. 8, Schritt 2) und teilen sich nur den Code, sonst nichts.
 
 Kurztest (noch ohne Profile — erwartet ist Default-Deny, kein Fehler):
 
@@ -208,15 +220,19 @@ Konsumenten ──:8000──▶ sluice.service (Kern: Gate → Strategie → Ve
                           └──:17893──▶ sluice-gateway@mistral   ──▶ api.mistral.ai
 ```
 
-| Instanz | Port | Env-Datei | Key darin |
-|---|---|---|---|
-| `sluice-gateway@anthropic` | 17890 | `/etc/sluice/gateway-anthropic.env` | `SLUICE_ANTHROPIC_API_KEY` |
-| `sluice-gateway@openai` | 17891 | `/etc/sluice/gateway-openai.env` | `SLUICE_OPENAI_API_KEY` |
-| `sluice-gateway@gemini` | 17892 | `/etc/sluice/gateway-gemini.env` | `SLUICE_GEMINI_API_KEY` |
-| `sluice-gateway@mistral` | 17893 | `/etc/sluice/gateway-mistral.env` | `SLUICE_MISTRAL_API_KEY` |
+| Instanz | Port | User (Rev. 8) | Env-Datei | Key darin |
+|---|---|---|---|---|
+| `sluice-gateway@anthropic` | 17890 | `sluice-gw-anthropic` | `/etc/sluice/gateway-anthropic.env` | `SLUICE_ANTHROPIC_API_KEY` |
+| `sluice-gateway@openai` | 17891 | `sluice-gw-openai` | `/etc/sluice/gateway-openai.env` | `SLUICE_OPENAI_API_KEY` |
+| `sluice-gateway@gemini` | 17892 | `sluice-gw-gemini` | `/etc/sluice/gateway-gemini.env` | `SLUICE_GEMINI_API_KEY` |
+| `sluice-gateway@mistral` | 17893 | `sluice-gw-mistral` | `/etc/sluice/gateway-mistral.env` | `SLUICE_MISTRAL_API_KEY` |
 
 Eigenschaften:
 
+- **User-Isolation (Rev. 8):** jede Instanz läuft unter ihrem eigenen System-User
+  `sluice-gw-<provider>` (Schritt 2) — die Template-Unit setzt `User=sluice-gw-%i`.
+  `/opt/sluice` bleibt dafür wie vom Checkout world-readable (o+rX); die Env-Dateien
+  liest systemd als root, kein Service-User kann fremde Keys lesen.
 - **Die Boundary bleibt im Kern.** Ein Gateway wird nur vom Sluice-Dispatch aufgerufen,
   *nachdem* der Verifier released hat — es sieht nie Rohtext. Deshalb: Gateways sind
   **interne Dienste**, eingehend nur vom Sluice-Kern erreichbar (Firewall), **nie** direkt
@@ -227,11 +243,12 @@ Eigenschaften:
   `SLUICE_HOST` in dessen `gateway-<provider>.env` und die `SLUICE_GATEWAY_<P>_URL`
   in der `sluice.env` des Kerns — sonst nichts.
 
-**Installation der Gateways** (zunächst auf derselben VM 8740):
+**Installation der Gateways** (zunächst auf derselben VM 8740; User aus Schritt 2):
 
 ```bash
 sudo cp /opt/sluice/deploy/sluice-gateway@.service /etc/systemd/system/
 for p in anthropic openai gemini mistral; do
+  id sluice-gw-$p >/dev/null    # User muss existieren (Schritt 2)
   sudo cp /opt/sluice/deploy/gateway-$p.env.example /etc/sluice/gateway-$p.env
   sudoedit /etc/sluice/gateway-$p.env    # Key eintragen (Host/Port sind vorbelegt)
   sudo chown root:root /etc/sluice/gateway-$p.env && sudo chmod 600 /etc/sluice/gateway-$p.env
@@ -263,8 +280,9 @@ fail-closed mit HTTP 500 `sluice_provider_config` (Rev. 7), nie in einem direkte
 Betrieb/Logs je Gateway: `journalctl -u sluice-gateway@anthropic -f`.
 
 **Umzug eines Gateways auf einen eigenen Server:** Schritte 1–3 dieses Dokuments auf dem
-neuen Server wiederholen (User, Code, venv — Profile braucht ein Gateway nicht), nur die
-eine `gateway-<provider>.env` mit angepasstem `SLUICE_HOST` anlegen, Gateway starten,
+neuen Server wiederholen — als User genügt dort der **eine** `sluice-gw-<provider>`
+(weder `sluice` noch die anderen Gateway-User; Profile braucht ein Gateway nicht) —,
+nur die eine `gateway-<provider>.env` mit angepasstem `SLUICE_HOST` anlegen, Gateway starten,
 im Kern die `SLUICE_GATEWAY_<P>_URL` umstellen, `systemctl restart sluice`. Firewall:
 Gateway-Port eingehend nur von der Sluice-Kern-IP; ausgehend 443 nur zum eigenen
 Provider-Host (Tabelle in Schritt 6).

@@ -8,6 +8,12 @@
 # umziehen. Der Sluice-Kern findet ein Gateway über SLUICE_GATEWAY_<PROVIDER>_URL
 # (in /etc/sluice/sluice.env) und ruft es ausschließlich NACH released=true auf.
 #
+# Jede Instanz läuft unter ihrem EIGENEN System-User sluice-gw-<provider> (Rev. 8):
+# User-Isolation zusätzlich zur Prozess-Isolation — kein Gateway kann den Speicher
+# oder die Dateien eines anderen (oder des Kerns) lesen, und beim Umzug auf einen
+# eigenen Server wandert genau dieser eine User mit. Anlegen (pro Provider):
+#   useradd --system --home /opt/sluice --shell /usr/sbin/nologin sluice-gw-<provider>
+#
 # Das Gateway ist ein INTERNER Dienst: eingehend nur vom Sluice-Kern erlauben
 # (Firewall), optional zusätzlich Shared Secret SLUICE_GATEWAY_TOKEN (beide Seiten).
 # Jede Instanz hält NUR den API-Key ihres eigenen Providers.
@@ -27,8 +33,9 @@ Wants=network-online.target
 
 [Service]
 Type=exec
-User=sluice
-Group=sluice
+# Eigener User pro Instanz (%i = Provider-Name, Rev. 8) — nie der Kern-User `sluice`.
+User=sluice-gw-%i
+Group=sluice-gw-%i
 WorkingDirectory=/opt/sluice
 
 # Provider dieser Instanz (Spec §7.3, Rev. 6).
