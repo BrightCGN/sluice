@@ -9,19 +9,27 @@ nur diese VM spricht die KI-Provider. Die Installation ist bewusst zustandsarm �
 hält v1 keine persistenten Daten (Mappings nur im Speicher, §8), die VM ist jederzeit neu
 aufbaubar.
 
+**Zwei Service-Arten, verbindlich getrennt (Rev. 7):** der Kern (`sluice.service`) und
+pro Provider ein eigenständiges Gateway (`sluice-gateway@<provider>`). Der Kern ruft
+Provider **nie** direkt — ohne laufendes Gateway (und dessen URL in `sluice.env`) ist
+jeder Egress zu diesem Provider ein Konfigurationsfehler, fail-closed.
+
 ---
 
 ## 0. Überblick
 
 ```
-Konsumenten (Temper, Aider, Crate, …)          Provider (nur von dieser VM erreichbar)
+Konsumenten (Temper, Aider, Crate, …)          Provider (nur von den Gateways erreichbar)
         │  HTTP :8000 (/v1/…)                       ▲  HTTPS :443
         ▼                                           │
 ┌─────────────────────────── VM 8740 · 192.168.87.40 ───────────────────────────┐
-│  systemd: sluice.service                                                      │
+│  systemd: sluice.service (Kern — keine Provider-Keys)                         │
 │    └─ uvicorn sluice.server:app  (User: sluice, gehärtet, fail-closed)        │
+│  systemd: sluice-gateway@<provider>  (je Provider, Ports ab 17890, §5.1)      │
+│    └─ uvicorn sluice.gateway:app  (hält NUR den Key seines Providers)         │
 │  /opt/sluice          Code + venv                                             │
-│  /etc/sluice          profiles.toml (§4) + sluice.env (Provider-Keys, §7.3)   │
+│  /etc/sluice          profiles.toml (§4) + sluice.env (Gateway-URLs, §7.3)    │
+│                       + gateway-<provider>.env (je ein Provider-Key)          │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -29,7 +37,7 @@ Konsumenten (Temper, Aider, Crate, …)          Provider (nur von dieser VM err
 |---|---|---|
 | `/opt/sluice` | Repo-Checkout + `.venv` | `sluice:sluice`, read-only im Betrieb |
 | `/etc/sluice/profiles.toml` | Konsumenten-Profile (§4) | `root:sluice`, `640` |
-| `/etc/sluice/sluice.env` | Provider-API-Keys (§7.3) | `root:root`, `600` |
+| `/etc/sluice/sluice.env` | Gateway-URLs des Kerns (§7.3, Rev. 7 — keine Provider-Keys) | `root:root`, `600` |
 | `/etc/systemd/system/sluice.service` | Unit (aus `deploy/`) | `root:root`, `644` |
 | `/etc/systemd/system/sluice-gateway@.service` | Template-Unit der Provider-Gateways (§5.1) | `root:root`, `644` |
 | `/etc/sluice/gateway-<provider>.env` | Host/Port + Key je Gateway (§5.1) | `root:root`, `600` |
@@ -141,11 +149,9 @@ sudoedit /etc/sluice/sluice.env
 sudo chown root:root /etc/sluice/sluice.env && sudo chmod 600 /etc/sluice/sluice.env
 ```
 
-Zwei Varianten (Vorlage mit Kommentaren: `deploy/sluice.env.example`):
-
-**Variante A — Dispatch über die eigenständigen Provider-Gateways (Rev. 6, empfohlen):**
-pro Provider die Gateway-URL; der Kern braucht dann **keine** Provider-Keys — die liegen
-nur bei den Gateways (Schritt 5.1):
+Der Kern erreicht Provider **ausschließlich über die eigenständigen Gateways** (Rev. 7):
+pro genutztem Provider dessen Gateway-URL. Der Kern hält **keine** Provider-Keys — die
+liegen nur bei den Gateways (Schritt 5.1). Vorlage: `deploy/sluice.env.example`.
 
 ```bash
 SLUICE_GATEWAY_ANTHROPIC_URL=http://192.168.87.40:17890
@@ -156,20 +162,11 @@ SLUICE_GATEWAY_MISTRAL_URL=http://192.168.87.40:17893
 # SLUICE_GATEWAY_TOKEN=…
 ```
 
-**Variante B — Kern ruft die Provider direkt** (ohne Gateway-Services); nur die Keys
-setzen, deren Provider keine Gateway-URL haben und die Profile per Allowlist erlauben:
-
-```bash
-SLUICE_ANTHROPIC_API_KEY=sk-ant-…
-SLUICE_OPENAI_API_KEY=sk-…
-SLUICE_GEMINI_API_KEY=…
-SLUICE_MISTRAL_API_KEY=…
-```
-
-Regeln (§7.3): Keys stehen **nie** im Profil-TOML, nie im Repo, nie im Audit-Log. Ein
-fehlender Key ist beim Aufruf des jeweiligen Providers ein harter Fehler (HTTP 500) —
-**kein** stiller Fallback auf einen anderen Provider. systemd liest die Datei als root und
-reicht die Werte in den Prozess; der `sluice`-User selbst kann die Datei nicht lesen.
+Regeln (§7.3): Keys stehen nur in den `gateway-<provider>.env`-Dateien — **nie** in der
+`sluice.env` des Kerns, nie im Profil-TOML, nie im Repo, nie im Audit-Log. Eine fehlende
+Gateway-URL ist beim Aufruf des jeweiligen Providers ein harter Fehler (HTTP 500) —
+**kein** direkter Provider-Aufruf, kein stiller Fallback. systemd liest die Datei als root
+und reicht die Werte in den Prozess; der `sluice`-User selbst kann die Datei nicht lesen.
 
 ---
 
@@ -194,11 +191,13 @@ sudo systemctl restart sluice
 
 (Profile werden beim Start geladen; einen Hot-Reload gibt es v1 bewusst nicht.)
 
-### 5.1 Provider-Gateways: eigenständige Services (§7.3, Rev. 6)
+### 5.1 Provider-Gateways: eigenständige Services, verpflichtend (§7.3, Rev. 7)
 
 Sluice-Kern und Provider-Gateways sind **getrennte Services mit eigenem Lebenszyklus** —
 jedes Gateway kann jederzeit auf einen eigenen Server umziehen, ohne dass sich für die
 Konsumenten etwas ändert. Der Kern findet ein Gateway ausschließlich über seine URL.
+**Die Gateways sind kein Optional:** ohne laufende `sluice-gateway@<provider>`-Instanz
+(und deren URL in `sluice.env`) kann der Kern zu diesem Provider keinen Egress ausführen.
 
 ```
 Konsumenten ──:8000──▶ sluice.service (Kern: Gate → Strategie → Verifier → Audit)
@@ -259,7 +258,8 @@ curl -s http://192.168.87.40:17890/v1/health
 ```
 
 Nur die Gateways aktivieren, deren Provider in mindestens einer Allowlist stehen.
-Provider ohne Gateway-URL ruft der Kern weiterhin direkt (dann braucht er deren Key).
+Ein Provider ohne Gateway-URL ist für den Kern nicht erreichbar — der Aufruf endet
+fail-closed mit HTTP 500 `sluice_provider_config` (Rev. 7), nie in einem direkten Call.
 Betrieb/Logs je Gateway: `journalctl -u sluice-gateway@anthropic -f`.
 
 **Umzug eines Gateways auf einen eigenen Server:** Schritte 1–3 dieses Dokuments auf dem
@@ -350,7 +350,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST \
 # → 403
 ```
 
-**7.5 Voll-Proxy mit echtem Provider (§7.2, benötigt gültigen Key):**
+**7.5 Voll-Proxy mit echtem Provider (§7.2, benötigt laufendes Gateway mit gültigem Key):**
 
 ```bash
 curl -s -X POST http://192.168.87.40:8000/v1/chat/completions \
@@ -390,8 +390,9 @@ curl -s http://192.168.87.40:8000/v1/health   # Abnahme 7.1 wiederholen
 reproduzierbar; der Service selbst hält keinen persistenten Zustand (Mappings sind
 in-memory mit TTL, §8 — ein Neustart verwirft sie absichtlich).
 
-**Neuen Konsumenten anschließen:** Profil in `profiles.toml` ergänzen (ggf. Key in
-`sluice.env`), `systemctl restart sluice`, Abnahme 7.2/7.4 fürs neue Profil wiederholen.
+**Neuen Konsumenten anschließen:** Profil in `profiles.toml` ergänzen (braucht er einen
+neuen Provider: Gateway-Instanz aktivieren + URL in `sluice.env`, §5.1),
+`systemctl restart sluice`, Abnahme 7.2/7.4 fürs neue Profil wiederholen.
 
 ---
 
@@ -404,7 +405,7 @@ in-memory mit TTL, §8 — ein Neustart verwirft sie absichtlich).
 | 403 „Purpose … nicht erlaubt" | `purpose` fehlt im Profil | `allowed_purposes` ergänzen oder korrektes `purpose`-Feld senden |
 | 403 „Provider … nicht in der Allowlist" | Request-`provider` nicht freigegeben (§4.1) | Allowlist erweitern — bewusste Entscheidung, Provider divergieren in Retention/Training |
 | 403 „Verifier blockiert: …" | Roher Identifier im Egress-Kandidaten | **Kein Sluice-Fehler — der Riegel arbeitet.** Konsument muss besser generalisieren, oder reversiblen Modus (Opt-in) nutzen |
-| 500 `sluice_provider_config` | API-Key fehlt / Provider-Name unbekannt | `sluice.env` prüfen, Service neu starten |
+| 500 `sluice_provider_config` | `SLUICE_GATEWAY_<P>_URL` fehlt (Rev. 7) / Provider-Name unbekannt / Key im Gateway fehlt | `sluice.env` (URLs) bzw. `gateway-<p>.env` (Key) prüfen, betroffenen Service neu starten |
 | 502 `sluice_provider_upstream` | Provider-API down oder Key ungültig | `journalctl` zeigt den HTTP-Status des Providers; Key/Status-Seite des Providers prüfen |
 | 502 mit `gateway …` in der reason | Gateway-Service down / URL falsch / Token-Mismatch | `systemctl status sluice-gateway@<p>`; `SLUICE_GATEWAY_<P>_URL` und `SLUICE_GATEWAY_TOKEN` auf beiden Seiten prüfen |
 | Service startet nicht | Python < 3.11, venv kaputt, Port belegt | `journalctl -u sluice -n 50`; `ss -tlnp | grep 8000` |

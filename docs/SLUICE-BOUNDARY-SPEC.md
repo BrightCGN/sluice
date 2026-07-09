@@ -1,6 +1,10 @@
 # Sluice — Boundary- & Contract-Spec (v1)
 
-> **Stand:** 2026-07-08. **Revision 6:** Provider-Gateways sind **eigenständige
+> **Stand:** 2026-07-09. **Revision 7:** Gateway-Pflicht — der Kern erreicht Provider
+> **ausschließlich** über die Gateway-Services; der direkte Adapter-Fallback aus
+> Revision 6 entfällt. Fehlende `SLUICE_GATEWAY_<PROVIDER>_URL` ⇒ fail-closed
+> Konfigurationsfehler (§7.3). Der Kern hält keine Provider-Keys mehr (Key-Isolation).
+> **Revision 6:** Provider-Gateways sind **eigenständige
 > Services** (`sluice/gateway.py`, ein Prozess pro Provider, Ports ab **17890**),
 > jederzeit auf getrennte Server umziehbar; der Kern dispatcht über
 > `SLUICE_GATEWAY_<PROVIDER>_URL` (§7.3) — immer erst nach `released=true`.
@@ -318,7 +322,8 @@ Die Allowlist (§4.1) begrenzt pro Profil, welche erlaubt sind.
 - **Reihenfolge zwingend:** Der Adapter wird ausschließlich vom Dispatch aufgerufen,
   *nachdem* `guarded_egress` released hat — nie mit unverifiziertem Text (Invariante 2).
 - **API-Keys:** per Env-Variable (`SLUICE_ANTHROPIC_API_KEY`, `SLUICE_OPENAI_API_KEY`,
-  `SLUICE_GEMINI_API_KEY`, `SLUICE_MISTRAL_API_KEY`). Nie im Profil-TOML, nie im Audit-Log.
+  `SLUICE_GEMINI_API_KEY`, `SLUICE_MISTRAL_API_KEY`) — seit Revision 7 **nur in der Env
+  des jeweiligen Gateway-Prozesses**, nie beim Kern. Nie im Profil-TOML, nie im Audit-Log.
   Fehlender Key ⇒ fail-closed (Fehler, kein stiller Fallback auf anderen Provider).
 - **Timeouts:** endlicher Connect-Timeout, **kein Read-Timeout** (agentische Turns streamen
   lange) — wie im übrigen Code.
@@ -338,8 +343,16 @@ Die Allowlist (§4.1) begrenzt pro Profil, welche erlaubt sind.
   **Die Boundary bleibt im Kern:** ein Gateway wird ausschließlich vom Dispatch aufgerufen,
   *nachdem* `guarded_egress` released hat — es sieht nie Rohtext und ist **nie direkt von
   Konsumenten erreichbar** (Firewall: eingehend nur vom Sluice-Kern; optional Shared Secret
-  `SLUICE_GATEWAY_TOKEN` auf beiden Seiten). Ohne konfigurierte Gateway-URL ruft der Kern
-  den direkten Adapter (`select_egress_adapter`) — beides hinter derselben Kette.
+  `SLUICE_GATEWAY_TOKEN` auf beiden Seiten).
+- **Gateway-Pflicht (Revision 7, verbindlich):** Der Kern ruft Provider **nie direkt** —
+  `select_egress_adapter` kennt ausschließlich Gateway-Adapter. Fehlt die
+  `SLUICE_GATEWAY_<PROVIDER>_URL` des angefragten Providers, ist das ein
+  **Konfigurationsfehler** (HTTP 500 `sluice_provider_config`, fail-closed), kein
+  stiller Fallback auf den direkten Adapter. Die direkten Adapter (`select_provider`)
+  laufen nur noch innerhalb der Gateway-Prozesse. Konsequenz: `sluice.service` allein
+  kann keinen Egress zu einem Provider ausführen — pro genutztem Provider muss die
+  zugehörige `sluice-gateway@<provider>`-Instanz laufen (Trennung der Lebenszyklen
+  ist damit erzwungen, nicht nur möglich).
 - **Provider-Lock für Kern-Instanzen (Revision 5, optional):** `SLUICE_PROVIDER` beschränkt
   eine Kern-Instanz auf genau einen Provider (fremde Provider ⇒ 403, fail-closed; Allowlist
   §4.1 gilt unverändert) — zusätzliche Schranke, kein Ersatz für die Gateway-Services.

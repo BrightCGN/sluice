@@ -47,6 +47,9 @@ Sluice undicht oder nicht wiederverwendbar. **Nicht selbst raten — gegen die S
   die konkreten Detektor-**Muster** (als Profil deklariert), die Provider-Allowlist.
 - **Seit Revision 2 in Sluice:** Provider-Adapter (anthropic/openai/gemini/mistral, §7.3)
   inkl. API-Keys per Env — Adapter werden **nur nach `released=true`** aufgerufen, nie davor.
+  **Seit Revision 7 verbindlich:** der Kern ruft Provider **nie direkt** — nur über die
+  eigenständigen Gateway-Services (`SLUICE_GATEWAY_<PROVIDER>_URL` Pflicht, fehlende URL ⇒
+  fail-closed); Provider-Keys liegen ausschließlich bei den Gateways.
 - **Nicht in Sluice (post-v1 offen):** Failover/Health/Tenant-Order-Routing.
 
 Wenn Domänenlogik „mal eben" nach Sluice greifen will: **das ist das Signal zu stoppen**, nicht

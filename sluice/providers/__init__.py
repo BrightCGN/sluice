@@ -5,6 +5,10 @@ AUSSCHLIESSLICH vom Dispatch aufgerufen, *nachdem* `guarded_egress` released hat
 nie mit unverifiziertem Text (Invariante 2). Kein Modul ruft je an der Kette vorbei
 nach außen.
 
+Seit Revision 7 laufen die direkten Adapter (`select_provider`) NUR noch in den
+Gateway-Prozessen (`sluice/gateway.py`); der Kern wählt seine Adapter über
+`select_egress_adapter` und erreicht Provider ausschließlich über die Gateways.
+
 - API-Keys per Env (`SLUICE_<PROVIDER>_API_KEY`), nie im Profil-TOML, nie im Audit.
   Fehlender Key ⇒ fail-closed (`ProviderConfigError`), kein stiller Fallback (§7.3).
 - Timeouts: endlicher Connect-Timeout, KEIN Read-Timeout — agentische Turns
@@ -106,25 +110,35 @@ def select_provider(
 def select_egress_adapter(
     name: str, *, http_client: httpx.AsyncClient | None = None
 ) -> ProviderAdapter:
-    """Adapter-Wahl des Sluice-Kerns (§7.3, Rev. 6).
+    """Adapter-Wahl des Sluice-Kerns (§7.3, Rev. 7): AUSSCHLIESSLICH über Gateways.
 
-    Ist für den Provider eine Gateway-URL konfiguriert (`SLUICE_GATEWAY_<PROVIDER>_URL`),
-    läuft der Egress über den eigenständigen Gateway-Service — der Kern braucht dann
-    keinen Provider-Key. Ohne URL wird der direkte Adapter benutzt. In beiden Fällen
-    ruft der Dispatch den Adapter erst nach `released=true` (Invariante 2).
+    Der Kern spricht Provider nie direkt an — jeder Provider braucht seinen
+    eigenständigen Gateway-Service und dessen URL (`SLUICE_GATEWAY_<PROVIDER>_URL`).
+    Fehlende URL ⇒ fail-closed (`ProviderConfigError`), kein stiller Fallback auf
+    den direkten Adapter. Der Kern hält damit keine Provider-Keys (Key-Isolation).
+    Der Dispatch ruft den Adapter erst nach `released=true` (Invariante 2).
     """
     canonical = canonical_provider(name)
-    gateway_url = os.environ.get(f"SLUICE_GATEWAY_{canonical.upper()}_URL", "").strip()
-    if gateway_url:
-        from sluice.providers.remote import RemoteGatewayAdapter
-
-        return RemoteGatewayAdapter(
-            provider=canonical,
-            base_url=gateway_url,
-            token=os.environ.get("SLUICE_GATEWAY_TOKEN", "").strip() or None,
-            http_client=http_client,
+    if canonical not in ("anthropic", "openai", "gemini", "mistral"):
+        raise ProviderConfigError(
+            f"Unbekannter Provider '{name}' (§7.3): kein Adapter registriert."
         )
-    return select_provider(name, http_client=http_client)
+    env_var = f"SLUICE_GATEWAY_{canonical.upper()}_URL"
+    gateway_url = os.environ.get(env_var, "").strip()
+    if not gateway_url:
+        raise ProviderConfigError(
+            f"Kein Gateway für Provider '{canonical}': Env-Variable {env_var} fehlt. "
+            f"Der Kern ruft Provider nie direkt — Gateway-Service starten und URL "
+            f"konfigurieren (§7.3, Rev. 7)."
+        )
+    from sluice.providers.remote import RemoteGatewayAdapter
+
+    return RemoteGatewayAdapter(
+        provider=canonical,
+        base_url=gateway_url,
+        token=os.environ.get("SLUICE_GATEWAY_TOKEN", "").strip() or None,
+        http_client=http_client,
+    )
 
 
 __all__ = [

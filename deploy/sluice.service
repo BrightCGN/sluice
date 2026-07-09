@@ -5,7 +5,9 @@
 #      && /opt/sluice/.venv/bin/pip install /opt/sluice
 #   2. Service-User:      useradd --system --home /opt/sluice --shell /usr/sbin/nologin sluice
 #   3. Konfiguration:     /etc/sluice/profiles.toml   (Profil-Schema, Spec §4)
-#                         /etc/sluice/sluice.env      (Provider-Keys; chmod 600, Eigentümer root)
+#                         /etc/sluice/sluice.env      (Gateway-URLs; chmod 600, Eigentümer root)
+#                         Provider-Keys liegen NICHT hier, sondern nur bei den
+#                         Gateway-Services (sluice-gateway@.service, Rev. 7)
 #   4. Unit installieren: cp deploy/sluice.service /etc/systemd/system/
 #                         systemctl daemon-reload && systemctl enable --now sluice
 #   5. Prüfen:            curl http://192.168.87.40:8000/v1/health
@@ -25,7 +27,8 @@ User=sluice
 Group=sluice
 WorkingDirectory=/opt/sluice
 
-# Profile (Spec §4) + Provider-Keys (Spec §7.3: SLUICE_<PROVIDER>_API_KEY, nie im Repo).
+# Profile (Spec §4) + Gateway-URLs (Spec §7.3, Rev. 7: SLUICE_GATEWAY_<PROVIDER>_URL —
+# der Kern hält keine Provider-Keys, die liegen bei den Gateway-Instanzen).
 Environment=SLUICE_PROFILES=/etc/sluice/profiles.toml
 EnvironmentFile=/etc/sluice/sluice.env
 

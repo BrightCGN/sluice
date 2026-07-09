@@ -19,7 +19,7 @@ import structlog
 from sluice.audit import AuditLog
 from sluice.guard import guarded_egress
 from sluice.policy import Profile
-from sluice.providers import ProviderAdapter, select_provider
+from sluice.providers import ProviderAdapter, select_egress_adapter
 from sluice.strategies import EgressPayload, SanitizationStrategy, Scope, select_strategy
 
 log = structlog.get_logger("sluice.dispatch")
@@ -96,7 +96,8 @@ async def guarded_completion(
 ) -> CompletionOutcome:
     """Geguardete Completion: Gate → Strategie → Verifier → Audit → Provider → reverse.
 
-    adapter: Injektion für Tests; sonst per Registry aus `provider_target` (§7.3).
+    adapter: Injektion für Tests; sonst Gateway-Adapter aus `provider_target`
+    (§7.3, Rev. 7 — ohne konfiguriertes Gateway fail-closed, nie direkt).
     Blockt der Guard, wird der Adapter NIE berührt (fail-closed, Invariante 2).
     """
     messages, chosen, reason = await _guard(
@@ -111,7 +112,7 @@ async def guarded_completion(
     if messages is None or chosen is None:
         return CompletionOutcome(released=False, reason=reason)
 
-    provider = adapter if adapter is not None else select_provider(provider_target)
+    provider = adapter if adapter is not None else select_egress_adapter(provider_target)
     response = await provider.complete(messages, model=model, max_tokens=max_tokens)
 
     text = response.text
@@ -164,7 +165,7 @@ async def guarded_stream(
     if messages is None or chosen is None:
         return StreamOutcome(released=False, reason=reason)
 
-    provider = adapter if adapter is not None else select_provider(provider_target)
+    provider = adapter if adapter is not None else select_egress_adapter(provider_target)
     reverser = (
         chosen.stream_reverser(scope if scope is not None else _DEFAULT_SCOPE)
         if chosen.reversible

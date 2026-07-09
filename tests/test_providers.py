@@ -213,9 +213,10 @@ async def test_remote_gateway_config_error_stays_fail_closed() -> None:
         await adapter.complete(MESSAGES, model="m")
 
 
-def test_select_egress_adapter_prefers_configured_gateway(
+def test_select_egress_adapter_requires_gateway(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Rev. 7: der Kern kennt nur Gateway-Adapter — ohne URL fail-closed, nie direkt."""
     from sluice.providers import select_egress_adapter
     from sluice.providers.remote import RemoteGatewayAdapter
 
@@ -224,5 +225,11 @@ def test_select_egress_adapter_prefers_configured_gateway(
     assert isinstance(adapter, RemoteGatewayAdapter)
     assert adapter.name == "anthropic"
 
+    # Fehlende Gateway-URL ⇒ Konfigurationsfehler, KEIN Fallback auf den direkten Adapter.
     monkeypatch.delenv("SLUICE_GATEWAY_ANTHROPIC_URL")
-    assert isinstance(select_egress_adapter("claude"), AnthropicAdapter)
+    with pytest.raises(ProviderConfigError, match="SLUICE_GATEWAY_ANTHROPIC_URL"):
+        select_egress_adapter("claude")
+
+    # Unbekannter Provider bleibt ebenfalls fail-closed.
+    with pytest.raises(ProviderConfigError, match="Unbekannter Provider"):
+        select_egress_adapter("acme-llm")

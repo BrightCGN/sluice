@@ -18,11 +18,12 @@ Start: `uvicorn sluice.server:app` mit `SLUICE_PROFILES=/pfad/profile.toml`.
 Ohne Profil-Datei startet der Service mit leerer Profil-Menge — Default-Deny (§4.3):
 jeder Request wird blockiert, nichts geht still raus.
 
-Provider-Gateways (Rev. 6, §7.3): die Gateways sind EIGENSTÄNDIGE Services
+Provider-Gateways (Rev. 6/7, §7.3): die Gateways sind EIGENSTÄNDIGE Services
 (`sluice/gateway.py`, Ports ab 17890, jederzeit auf getrennte Server umziehbar).
-Ist `SLUICE_GATEWAY_<PROVIDER>_URL` gesetzt, dispatcht der Kern über das jeweilige
-Gateway statt über den direkten Adapter (`select_egress_adapter`) — immer erst
-nach `released=true`.
+Der Kern erreicht Provider AUSSCHLIESSLICH über sie (Rev. 7, verbindlich): pro
+Provider muss `SLUICE_GATEWAY_<PROVIDER>_URL` gesetzt sein — fehlt sie, ist der
+Aufruf ein Konfigurationsfehler (fail-closed), nie ein direkter Provider-Call.
+Dispatch über das Gateway immer erst nach `released=true`.
 
 Provider-Lock (Rev. 5, optional): ist `SLUICE_PROVIDER` gesetzt (bzw. `provider_lock`
 übergeben), bedient DIESE Kern-Instanz genau einen Provider; Requests an andere ⇒ 403,
