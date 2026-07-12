@@ -112,7 +112,9 @@ async def guarded_egress(
     if chosen.enforce_verifier:
         findings: list[str] = []
         for text in texts:
-            verification = verify_no_identifiers(text, profile.detector_profile)
+            verification = verify_no_identifiers(
+                text, profile.detector_profile, dictionary_terms=profile.dictionary_terms
+            )
             findings.extend(verification.findings)
         if findings:
             return _blocked(f"Verifier blockiert: {', '.join(findings)}", tuple(findings))

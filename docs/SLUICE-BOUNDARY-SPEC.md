@@ -1,6 +1,13 @@
 # Sluice — Boundary- & Contract-Spec (v1)
 
-> **Stand:** 2026-07-12. **Revision 9:** Richtungswechsel — Sluice ist ein **erweiterbares
+> **Stand:** 2026-07-12. **Revision 10:** Profil-**Wörterbuch** (`dictionary_terms`, §4/§5.1) —
+> konsument-deklarierte **Literale** (Namen, Adressen), die die generischen Regex-Detektoren
+> (`infra`/`media`) prinzipbedingt nicht erkennen. Sie ergänzen das Detektor-Set des Profils:
+> `strict` redigiert sie zu `[NAME]`, der Verifier blockt sie **fail-closed in jedem Modus**.
+> Mechanismus/Domäne bleibt sauber (§1.1): die *Term-Liste* ist Domäne (im Profil deklariert),
+> das *literale Matching* (wortgrenzen-gebunden, case-insensitiv) ist Sluice-Engine. Schließt die
+> Deckungslücke für freie Namen — Herkunft ist das `dictionary` aus PrismClaws/Crates anon, jetzt
+> zentral. Additiv und rückwärtskompatibel (Default leer). **Revision 9:** Richtungswechsel — Sluice ist ein **erweiterbares
 > Egress-Sanitisierungs-Framework**, kein einzelner *erzwungener* Riegel mehr. **Modi sind eine
 > Registry** (§3): jeder Modus ist ein eigenständiger Egress-Handler hinter *einem* Interface;
 > `passthrough` ist ein First-Class-Modus (§2.1). **Die Modus-Wahl gehört dem Konsumenten**,
@@ -286,11 +293,12 @@ detector_profile    = "code"
   storage           = "memory"                # memory | persistent(post-v1)
 
 [profile."crate"]
-mode                = "generalizing"
+mode                = "strict"                # auto-redigiert das rohe Operator-Thema (Rev. 9)
 egress_enabled      = true
 allowed_purposes    = ["playlist_curation"]
 provider_allowlist  = ["claude", "gemini", "openai"]
 detector_profile    = "media"
+dictionary_terms    = ["Richard", "Musterstraße 12"]  # Namen/Adressen, die Regex nicht fängt (§5.1, Rev. 10)
 
 [profile."bank-tool"]                         # strengstes Profil (§4.4)
 mode                = "strict"                 # kein consumer-generalisierter Text: harter Modus
@@ -360,6 +368,28 @@ Die *Engine* (Regex/NER-Runner) ist geteilt; die *Muster* kommen aus dem `detect
 \* Beim Bank-Tool widersprechen sich Sanitisierung und Lösbarkeit maximal (Beträge *sind* der
 Nutzen). Auflösung: Rechnen bleibt **lokal**; nur die abstrahierte Strategiefrage (Kategorien/
 Spannen statt Salden) geht raus. Das ist Profil-Arbeit, kein Sluice-Mechanismus. *(Details post-v1)*
+
+#### 5.1.1 Profil-**Wörterbuch** `dictionary_terms` (Rev. 10)
+
+Die Regex-Muster erkennen strukturierte Identifier (IP, E-Mail, Host, Pfad), **nicht** aber
+freie **Namen und Adressen** („Richard", „Musterstraße 12") — die haben keine generische Form.
+Genau diese Deckung leistete das `dictionary` in PrismClaws/Crates anon. Sluice zieht sie als
+**profil-deklarierte Term-Liste** ein:
+
+```toml
+dictionary_terms = ["Richard", "Musterstraße 12", "Acme GmbH"]
+```
+
+- **Matching (Engine):** jeder Term wird **literal** (regex-escaped), **wortgrenzen-gebunden**
+  und **case-insensitiv** gematcht — „Richardson" ist nicht „Richard".
+- **Wirkung:** `strict` redigiert Treffer zu `[NAME]`; der Verifier führt sie als Befund und
+  blockt **fail-closed in jedem Modus** (auch `generalizing`/`pseudonymizing` — der Boden gilt
+  für alle, §5). Ein Modus muss die Terme nicht kennen; der Verifier fängt sie darunter.
+- **Mechanismus/Domäne (§1.1):** die *Liste* ist Domäne (der Konsument weiß, welche Namen in
+  seinem Haushalt/Kontext vorkommen) → im Profil. Das *Matching* ist geteilte Engine → Sluice.
+- **Grenze:** literal, nicht semantisch — Flexionen/Tippfehler/unbekannte Namen deckt erst NER
+  (§5.2, post-v1). Für einen bekannten, überschaubaren Term-Satz (Haushaltsnamen) ist das
+  deterministische Wörterbuch die richtige, prüfbare Antwort.
 
 ### 5.2 Genericity-Check (Re-Identifikation durch Kombination) *(post-v1)*
 Reifeversion: nicht nur „enthält Identifier?", sondern „generisch genug, um aus vielen

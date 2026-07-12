@@ -44,6 +44,7 @@ class Profile:
     provider_allowlist: tuple[str, ...] = ()
     allowed_modes: tuple[str, ...] = ()  # leer = alle Modi erlaubt (§4.1, Rev. 9)
     detector_profile: str = "infra"
+    dictionary_terms: tuple[str, ...] = ()  # konsument-deklarierte Literale (§5.1, Rev. 10)
     reversible: ReversibleConfig | None = None
 
     @property
@@ -149,6 +150,7 @@ def parse_profiles(toml_text: str) -> dict[str, Profile]:
             provider_allowlist=tuple(raw.get("provider_allowlist", ())),
             allowed_modes=allowed_modes,
             detector_profile=raw.get("detector_profile", "infra"),
+            dictionary_terms=tuple(str(t) for t in raw.get("dictionary_terms", ())),
             reversible=reversible,
         )
     return profiles

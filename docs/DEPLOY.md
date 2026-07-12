@@ -123,9 +123,10 @@ jeden Egress.** Das ist Absicht (fail-closed), keine Störung.
 Jedes Projekt bekommt **ein** Profil. Startbeispiel:
 
 ```toml
-# Irreversibel ist der Default (Rev. 4, safety first) — strategy kann entfallen.
+# `strict` ist der Auslieferungs-Default (Rev. 9, safety first) — `mode` kann entfallen.
+# `strict` redigiert selbst; wo der Konsument bereits generalisiert, `mode = "generalizing"`.
 [profile."temper"]
-strategy            = "generalizing"
+mode                = "generalizing"          # verifiziert den vom Konsumenten generalisierten Text
 egress_enabled      = true
 allowed_purposes    = ["external_escalation", "promotion_upload"]
 provider_allowlist  = ["anthropic", "gemini"]
@@ -133,7 +134,7 @@ detector_profile    = "infra"
 
 # Reversibel ist explizites Opt-in (§2) — nur wo die Rückübersetzung gebraucht wird.
 [profile."aider-code"]
-strategy            = "pseudonymizing"
+mode                = "pseudonymizing"
 egress_enabled      = true
 allowed_purposes    = ["code_completion"]
 provider_allowlist  = ["anthropic"]
@@ -142,6 +143,16 @@ detector_profile    = "code"
   scope             = "session"
   ttl_seconds       = 3600
   storage           = "memory"
+
+# strict + Profil-Wörterbuch (Rev. 10): auto-redigiert, deckt via dictionary_terms auch
+# freie Namen/Adressen ab, die Regex nicht fängt (§5.1.1).
+[profile."crate"]
+mode                = "strict"
+egress_enabled      = true
+allowed_purposes    = ["playlist_curation"]
+provider_allowlist  = ["anthropic", "gemini"]
+detector_profile    = "media"
+dictionary_terms    = ["Richard", "Musterstraße 12"]
 ```
 
 ```bash
@@ -172,7 +183,14 @@ SLUICE_GATEWAY_GEMINI_URL=http://192.168.87.40:17892
 SLUICE_GATEWAY_MISTRAL_URL=http://192.168.87.40:17893
 # optional, muss dann auch in jeder gateway-<provider>.env stehen:
 # SLUICE_GATEWAY_TOKEN=…
+# Audit-Detailgrad (Rev. 9, §6) — Betreiber-Entscheidung: off | metadata | full.
+# Default metadata (loggt DASS, ohne Nutzdaten); full = reviewbares Vorher/Nachher.
+# SLUICE_AUDIT_LEVEL=metadata
 ```
+
+**Modus-Feld (Rev. 9/10):** Profile nutzen `mode` (`strict` Default, §4.1); das alte Feld
+`strategy` bleibt als Alias lesbar. `dictionary_terms` (Rev. 10) ergänzt pro Profil freie
+Namen/Adressen, die Regex nicht fängt (§5.1.1).
 
 Regeln (§7.3): Keys stehen nur in den `gateway-<provider>.env`-Dateien — **nie** in der
 `sluice.env` des Kerns, nie im Profil-TOML, nie im Repo, nie im Audit-Log. Eine fehlende
@@ -212,7 +230,7 @@ Konsumenten etwas ändert. Der Kern findet ein Gateway ausschließlich über sei
 (und deren URL in `sluice.env`) kann der Kern zu diesem Provider keinen Egress ausführen.
 
 ```
-Konsumenten ──:8000──▶ sluice.service (Kern: Gate → Strategie → Verifier → Audit)
+Konsumenten ──:8000──▶ sluice.service (Kern: Gate → Modus → Verifier → Audit)
                           │ nur nach released=true, via SLUICE_GATEWAY_<P>_URL
                           ├──:17890──▶ sluice-gateway@anthropic ──▶ api.anthropic.com
                           ├──:17891──▶ sluice-gateway@openai    ──▶ api.openai.com
@@ -291,7 +309,7 @@ Provider-Host (Tabelle in Schritt 6).
 
 ## 6. Firewall — Sluice als einziger Egress-Pfad
 
-Netzwerkseitig wird das DSGVO-Argument (§1) erst rund: **nur** diese VM darf zu den
+Netzwerkseitig wird der technische Egress-Riegel (§1) erst rund: **nur** diese VM darf zu den
 Provider-APIs hinaus, und hinein darf nur der Perimeter.
 
 Eingehend:
@@ -386,7 +404,7 @@ Erst wenn 7.1–7.5 wie beschrieben antworten, Konsumenten auf die VM zeigen las
 
 ## 8. Betrieb
 
-**Logs** (strukturiert; jede Egress-Entscheidung erscheint mit Profil, Purpose, Strategie,
+**Logs** (strukturiert; jede Egress-Entscheidung erscheint mit Profil, Purpose, Modus,
 released/blocked und Verifier-Findings):
 
 ```bash

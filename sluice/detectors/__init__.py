@@ -12,7 +12,7 @@ Konservative Deny-Muster: lieber false-positive (blockt zu viel) als ein Leck.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 
@@ -57,3 +57,31 @@ _PROFILES: dict[str, DetectorProfile] = {
 def get_detector_profile(name: str) -> DetectorProfile | None:
     """Muster-Set per Name; None bei unbekanntem Profil (Verifier blockt dann fail-closed)."""
     return _PROFILES.get(name)
+
+
+# Redaktions-Platzhalter für Wörterbuch-Treffer (Rev. 10). Der Hauptfall ist der
+# personenbezogene Name; nicht-Namen werden ebenso sicher ersetzt, nur so etikettiert.
+DICTIONARY_PLACEHOLDER = "[NAME]"
+
+
+def build_dictionary_patterns(terms: Iterable[str]) -> tuple[DenyPattern, ...]:
+    """Baut Deny-Muster aus konsument-deklarierten Wörterbuch-Termen (Spec §5.1, Rev. 10).
+
+    Jeder Term wird **literal** (regex-escaped), **wortgrenzen-gebunden** und
+    **case-insensitiv** gematcht — das deckt freie Namen/Adressen ab, die die generischen
+    Regex-Muster (`infra`/`media`) prinzipbedingt nicht erkennen. Leere/whitespace-Terme
+    werden übersprungen. Die *Liste* ist Domäne (Profil), das *Matching* ist Mechanismus.
+    """
+    patterns: list[DenyPattern] = []
+    for term in terms:
+        cleaned = term.strip()
+        if not cleaned:
+            continue
+        patterns.append(
+            DenyPattern(
+                finding="Wörterbuch-Term erkannt",
+                pattern=re.compile(rf"\b{re.escape(cleaned)}\b", re.IGNORECASE),
+                placeholder=DICTIONARY_PLACEHOLDER,
+            )
+        )
+    return tuple(patterns)

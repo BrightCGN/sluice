@@ -27,8 +27,11 @@ class StrictStrategy:
     name = "strict"
     enforce_verifier = True  # der Verifier ist der harte Boden unter der Redaktion (§5)
 
-    def __init__(self, *, detector_profile: str = "infra") -> None:
+    def __init__(
+        self, *, detector_profile: str = "infra", dictionary_terms: tuple[str, ...] = ()
+    ) -> None:
         self._detector_profile = detector_profile
+        self._dictionary_terms = dictionary_terms
 
     async def forward(self, payload: EgressPayload, scope: Scope | None) -> Sanitized:
         """Redigiert eigenständig: Proxy-Form (messages) je Text-Inhalt, sonst den Rohtext.
@@ -39,13 +42,18 @@ class StrictStrategy:
         if payload.messages is not None:
             redacted = [self._redact_message(m) for m in payload.messages]
             return Sanitized(messages=redacted)
-        return Sanitized(text=redact_identifiers(payload.raw_text, self._detector_profile))
+        return Sanitized(text=self._redact(payload.raw_text))
+
+    def _redact(self, text: str) -> str:
+        return redact_identifiers(
+            text, self._detector_profile, dictionary_terms=self._dictionary_terms
+        )
 
     def _redact_message(self, message: dict[str, Any]) -> dict[str, Any]:
         content = message.get("content")
         if not isinstance(content, str):
             return message
-        return {**message, "content": redact_identifiers(content, self._detector_profile)}
+        return {**message, "content": self._redact(content)}
 
     async def reverse_text(self, text: str, scope: Scope) -> str:
         raise NotImplementedError("StrictStrategy ist irreversibel (Auto-Redaktion, §3).")

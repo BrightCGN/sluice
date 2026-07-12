@@ -17,7 +17,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from sluice.detectors import DetectorProfile, get_detector_profile
+from collections.abc import Sequence
+
+from sluice.detectors import (
+    DetectorProfile,
+    build_dictionary_patterns,
+    get_detector_profile,
+)
 
 
 @dataclass
@@ -28,11 +34,18 @@ class VerificationResult:
     findings: list[str] = field(default_factory=list)
 
 
-def verify_no_identifiers(text: str, detector_profile: str | DetectorProfile = "infra") -> VerificationResult:
+def verify_no_identifiers(
+    text: str,
+    detector_profile: str | DetectorProfile = "infra",
+    *,
+    dictionary_terms: Sequence[str] = (),
+) -> VerificationResult:
     """Harter Riegel: findet *irgendeinen* Identifier → blockiert (clean=False).
 
     detector_profile: Name eines registrierten Muster-Sets (Spec §5.1) oder ein
     DetectorProfile-Objekt. Unbekannter Name → fail-closed blockieren, nicht raten.
+    dictionary_terms: konsument-deklarierte Wörterbuch-Terme (Spec §5.1, Rev. 10) —
+    literal/wortgrenzen/case-insensitiv geprüft, ergänzen die Muster des Profils.
     """
     if isinstance(detector_profile, str):
         profile = get_detector_profile(detector_profile)
@@ -44,8 +57,10 @@ def verify_no_identifiers(text: str, detector_profile: str | DetectorProfile = "
     else:
         profile = detector_profile
 
+    deny_patterns = (*profile.deny, *build_dictionary_patterns(dictionary_terms))
+
     findings: list[str] = []
-    for deny in profile.deny:
+    for deny in deny_patterns:
         if deny.per_match:
             for match in deny.pattern.findall(text):
                 if deny.validate is None or deny.validate(match):
@@ -56,7 +71,12 @@ def verify_no_identifiers(text: str, detector_profile: str | DetectorProfile = "
     return VerificationResult(clean=not findings, findings=findings)
 
 
-def redact_identifiers(text: str, detector_profile: str | DetectorProfile = "infra") -> str:
+def redact_identifiers(
+    text: str,
+    detector_profile: str | DetectorProfile = "infra",
+    *,
+    dictionary_terms: Sequence[str] = (),
+) -> str:
     """Auto-Redaktion für den `strict`-Modus (Spec §3): ersetzt jeden Muster-Treffer des
     Detektor-Profils durch seinen typisierten Platzhalter (`[IP]`, `[EMAIL]`, …).
 
@@ -72,7 +92,7 @@ def redact_identifiers(text: str, detector_profile: str | DetectorProfile = "inf
     else:
         profile = detector_profile
 
-    for deny in profile.deny:
+    for deny in (*profile.deny, *build_dictionary_patterns(dictionary_terms)):
         if deny.validate is not None:
             text = deny.pattern.sub(
                 lambda m, d=deny: d.placeholder if d.validate(m.group(0)) else m.group(0),

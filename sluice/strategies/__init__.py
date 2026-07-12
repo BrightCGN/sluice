@@ -136,7 +136,12 @@ def _ensure_builtins() -> None:
     from sluice.strategies.pseudonymizing import PseudonymizingStrategy
     from sluice.strategies.strict import StrictStrategy
 
-    register_mode("strict", lambda p: StrictStrategy(detector_profile=p.detector_profile))
+    register_mode(
+        "strict",
+        lambda p: StrictStrategy(
+            detector_profile=p.detector_profile, dictionary_terms=p.dictionary_terms
+        ),
+    )
     register_mode("passthrough", lambda p: PassthroughStrategy())
     register_mode("generalizing", lambda p: GeneralizingStrategy())
     register_mode(
