@@ -1,4 +1,4 @@
-"""PassthroughStrategy — der triviale Modus (Spec §2.1, Rev. 9).
+"""PassthroughMode — der triviale Modus (Spec §2.1, Rev. 9).
 
 Kein Bypass an der Boundary vorbei: der Payload läuft durch dieselbe Kette
 (Profil-Gate → Modus → Audit), aber dieser Modus **transformiert nicht und komponiert
@@ -18,10 +18,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from sluice.strategies import EgressPayload, Sanitized, Scope, StreamReverserProtocol
+from sluice.modes import EgressPayload, Sanitized, Scope, StreamReverserProtocol
 
 
-class PassthroughStrategy:
+class PassthroughMode:
     reversible = False
     name = "passthrough"
     enforce_verifier = False  # bewusst KEIN Verifier — die Konsumenten-Entscheidung (§2.1)
@@ -34,10 +34,10 @@ class PassthroughStrategy:
         return Sanitized(text=payload.raw_text)
 
     async def reverse_text(self, text: str, scope: Scope) -> str:
-        raise NotImplementedError("PassthroughStrategy ist irreversibel (kein Mapping, §2.1).")
+        raise NotImplementedError("PassthroughMode ist irreversibel (kein Mapping, §2.1).")
 
     def stream_reverser(self, scope: Scope) -> StreamReverserProtocol:
-        raise NotImplementedError("PassthroughStrategy ist irreversibel (kein Mapping, §2.1).")
+        raise NotImplementedError("PassthroughMode ist irreversibel (kein Mapping, §2.1).")
 
     async def reverse_obj(self, obj: dict[str, Any], scope: Scope) -> dict[str, Any]:
-        raise NotImplementedError("PassthroughStrategy ist irreversibel (kein Mapping, §2.1).")
+        raise NotImplementedError("PassthroughMode ist irreversibel (kein Mapping, §2.1).")

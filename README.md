@@ -67,7 +67,7 @@ uv venv && uv pip install -e '.[dev]'
 
 ## Stand
 
-Kern + Strategien + HTTP-Service (`/v1/…`) stehen. **Rev. 9** macht Sluice zum
+Kern + Modi + HTTP-Service (`/v1/…`) stehen. **Rev. 9** macht Sluice zum
 erweiterbaren Modus-Framework (`strict`-Default, `passthrough`, `allowed_modes`,
 konfigurierbares Audit). Offen (§10): Open-Source-Split (generischer Kern öffentlich,
 Homelab-/Konsumenten-Details privat), öffentliches Modus-Plugin-API, Lizenzwahl.

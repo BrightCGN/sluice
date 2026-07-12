@@ -30,7 +30,7 @@ from sluice.policy import (
     check_mode_allowed,
     check_provider_allowed,
 )
-from sluice.strategies import EgressPayload, Mode, Sanitized, Scope, select_mode
+from sluice.modes import EgressPayload, Mode, Sanitized, Scope, select_mode
 from sluice.verifier import verify_no_identifiers
 
 log = structlog.get_logger("sluice.guard")
@@ -51,17 +51,17 @@ async def guarded_egress(
     payload: EgressPayload,
     scope: Scope | None = None,
     provider_target: str | None = None,
-    strategy: Mode | None = None,
+    mode: Mode | None = None,
     audit: AuditLog | None = None,
 ) -> EgressOutcome:
     """Lässt Inhalt NUR durch, wenn Profil-Gate **und** Verifier zustimmen (Spec §2).
 
     profile:         das deklarierte Konsumenten-Profil; None → Default-Deny (§4.3).
     purpose:         wofür der Egress ist — muss in `profile.allowed_purposes` stehen.
-    payload:         Roh-Text (nur Audit) + Egress-Kandidat (je nach Strategie-Form).
+    payload:         Roh-Text (nur Audit) + Egress-Kandidat (je nach Modus-Form).
     scope:           Mapping-Scope, nur für pseudonymizing relevant (§8).
     provider_target: Ziel-Provider; wird gegen die Profil-Allowlist geprüft (§4.1).
-    strategy:        Injektion für Tests; sonst per Profil gewählt (§2, der Schalter).
+    mode:            Injektion für Tests; sonst per Profil gewählt (§3, der Schalter).
     audit:           Injektion für Tests; sonst das eine prozessweite egress_log (§6).
     """
     audit_log = audit if audit is not None else _default_audit
@@ -99,7 +99,7 @@ async def guarded_egress(
         return _blocked(mode_decision.reason)
 
     # 2. Modus (der Schalter zieht ihn aus der Registry, §3).
-    chosen = strategy if strategy is not None else select_mode(profile)
+    chosen = mode if mode is not None else select_mode(profile)
     sanitized: Sanitized = await chosen.forward(payload, scope)
 
     texts = sanitized.texts()

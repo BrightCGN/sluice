@@ -8,7 +8,7 @@ from __future__ import annotations
 from sluice.audit import AuditLog
 from sluice.guard import guarded_egress
 from sluice.policy import Profile, ReversibleConfig
-from sluice.strategies import EgressPayload, Scope
+from sluice.modes import EgressPayload, Scope
 
 TEMPER = Profile(
     name="temper",
@@ -75,10 +75,10 @@ async def test_sovereign_profile_blocks_all_egress() -> None:
 
 
 async def test_verifier_equally_strict_in_both_modes() -> None:
-    """Derselbe roh durchgeschmuggelte Identifier wird in beiden Strategien blockiert.
+    """Derselbe roh durchgeschmuggelte Identifier wird in beiden Modi blockiert.
 
     Der Hostname `es-prod-01.corp.internal` liegt außerhalb der Detektions-Muster der
-    pseudonymisierenden Strategie — das Mapping übersieht ihn. Genau dann muss der
+    pseudonymisierenden Modus — das Mapping übersieht ihn. Genau dann muss der
     Verifier darunter greifen: „reversibel" ist kein Grund, den Riegel zu lockern.
     """
     smuggled = "Host es-prod-01.corp.internal überlastet"

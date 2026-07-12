@@ -1,6 +1,6 @@
 """Sluice — die eine gemeinsame Sanitisierungs-Boundary (docs/SLUICE-BOUNDARY-SPEC.md).
 
-Jeder Egress läuft durch dieselbe Kette: Profil-Gate → Strategie → Verifier → Audit.
+Jeder Egress läuft durch dieselbe Kette: Profil-Gate → Modus → Verifier → Audit.
 """
 
 from __future__ import annotations
@@ -16,12 +16,12 @@ from sluice.policy import (
     load_profiles,
     parse_profiles,
 )
-from sluice.strategies import (
+from sluice.modes import (
     EgressPayload,
+    Mode,
     Sanitized,
-    SanitizationStrategy,
     Scope,
-    select_strategy,
+    select_mode,
 )
 from sluice.verifier import VerificationResult, verify_no_identifiers
 
@@ -31,10 +31,10 @@ __all__ = [
     "EgressLogEntry",
     "EgressOutcome",
     "EgressPayload",
+    "Mode",
     "Profile",
     "ReversibleConfig",
     "Sanitized",
-    "SanitizationStrategy",
     "Scope",
     "VerificationResult",
     "check_egress_allowed",
@@ -43,7 +43,7 @@ __all__ = [
     "guarded_egress",
     "load_profiles",
     "parse_profiles",
-    "select_strategy",
+    "select_mode",
     "verify_no_identifiers",
 ]
 

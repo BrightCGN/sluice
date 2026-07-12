@@ -63,7 +63,7 @@ def check_egress_allowed(profile: Profile | None, purpose: str) -> EgressDecisio
     """Profil-Gate — läuft immer zuerst (Spec §2, Invariante 1).
 
     Prüft, ob ein ausgehender Vorgang für dieses Profil überhaupt erlaubt ist,
-    *bevor* irgendeine Strategie läuft.
+    *bevor* irgendein Modus läuft.
     """
     if profile is None:
         return EgressDecision(
@@ -113,7 +113,7 @@ def check_mode_allowed(profile: Profile, mode: str) -> EgressDecision:
 
 def parse_profiles(toml_text: str) -> dict[str, Profile]:
     """Parst das Profil-Schema aus Spec §4 (TOML). Validiert fail-closed beim Laden."""
-    from sluice.strategies import is_registered_mode  # lazy: vermeidet Import-Zyklus
+    from sluice.modes import is_registered_mode  # lazy: vermeidet Import-Zyklus
 
     data = tomllib.loads(toml_text)
     profiles: dict[str, Profile] = {}

@@ -9,8 +9,8 @@ from sluice.audit import AuditLog
 from sluice.dispatch import guarded_completion, guarded_stream
 from sluice.policy import Profile, ReversibleConfig
 from sluice.providers import ProviderResponse
-from sluice.strategies import EgressPayload, Scope
-from sluice.strategies.pseudonymizing import PseudonymizingStrategy
+from sluice.modes import EgressPayload, Scope
+from sluice.modes.pseudonymizing import PseudonymizingMode
 
 TEMPER = Profile(
     name="temper",
@@ -130,7 +130,7 @@ async def test_released_generalizing_sends_sanitized_text() -> None:
 
 
 async def test_pseudonymizing_roundtrip_reverses_response() -> None:
-    strategy = PseudonymizingStrategy(dictionary_terms=("Max Mustermann",))
+    mode = PseudonymizingMode(dictionary_terms=("Max Mustermann",))
     scope = Scope(key="s1")
     adapter = FakeAdapter(reply="Hallo ⟦NAME_1⟧, alles klar.")
     outcome = await guarded_completion(
@@ -143,7 +143,7 @@ async def test_pseudonymizing_roundtrip_reverses_response() -> None:
         provider_target="claude",
         model="claude-sonnet-5",
         scope=scope,
-        strategy=strategy,
+        mode=mode,
         adapter=adapter,
         audit=AuditLog(),
     )
@@ -156,7 +156,7 @@ async def test_pseudonymizing_roundtrip_reverses_response() -> None:
 
 async def test_pseudonymizing_stream_reverses_token_split_over_chunks() -> None:
     # Pflicht-Fall Streaming-Holdback: Pseudonym über zwei Chunks (§7.2).
-    strategy = PseudonymizingStrategy(dictionary_terms=("Max Mustermann",))
+    mode = PseudonymizingMode(dictionary_terms=("Max Mustermann",))
     scope = Scope(key="s2")
     adapter = FakeAdapter(stream_chunks=("Hallo ⟦NAM", "E_1⟧!"))
     outcome = await guarded_stream(
@@ -169,7 +169,7 @@ async def test_pseudonymizing_stream_reverses_token_split_over_chunks() -> None:
         provider_target="claude",
         model="claude-sonnet-5",
         scope=scope,
-        strategy=strategy,
+        mode=mode,
         adapter=adapter,
         audit=AuditLog(),
     )

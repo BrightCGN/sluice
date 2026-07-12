@@ -1,4 +1,4 @@
-"""Deterministischer Verifier — der harte Riegel unter der Strategie (Spec §5).
+"""Deterministischer Verifier — der harte Riegel unter dem Modus (Spec §5).
 
 Sicherheitsorientiert, **deterministisch**: garantiert, dass kein Identifier die
 Grenze überquert. **Nicht** dem Modellurteil überlassen — ein LLM ist probabilistisch,

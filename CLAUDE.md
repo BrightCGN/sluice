@@ -97,12 +97,14 @@ expliziter Wahl, optional per `allowed_modes` pro Profil sperrbar (§4.1).
 
 ```
 sluice/
-  guard.py               # Orchestrierung: Gate → Strategie → Verifier → Audit
+  guard.py               # Orchestrierung: Gate → Modus → Verifier → Audit
   policy.py              # Profil-Schema + check_egress_allowed
   verifier.py            # deterministischer Riegel; Muster aus Detektor-Profilen
   audit.py               # egress_log, append-only
-  strategies/
-    __init__.py          # SanitizationStrategy (Protocol) + Registry
+  modes/
+    __init__.py          # Mode (Protocol) + Registry (select_mode/register_mode)
+    strict.py            # auto-redigierend, Auslieferungs-Default (§4.3)
+    passthrough.py       # Identität, kein Verifier (§2.1)
     generalizing.py      # forward-only
     pseudonymizing.py    # forward + reverse + stream_reverser + reverse_obj + scope/TTL
   detectors/             # Muster-Sets: infra, code, media, financial

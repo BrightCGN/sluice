@@ -1,16 +1,18 @@
-"""Strategie-Schalter — Interface + Auswahl (Spec §2/§3).
+"""Modus-Schalter — Interface + Auswahl (Spec §2/§3, Rev. 9).
 
-Der Schalter wählt eine *Strategie-Implementierung*, kein `if reversible:` im Guard.
-Die drei Invarianten (Profil-Gate, Verifier, Audit) verändert er NIE — er tauscht
-nur das Strategie-Objekt (Spec §2).
+Der Schalter wählt eine *Modus-Implementierung* aus der Registry, kein `if reversible:`
+im Guard. Die sicheren Defaults (Profil-Gate, Verifier, Audit) verändert er NIE — er
+tauscht nur das Modus-Objekt (Spec §3).
 
-- `GeneralizingStrategy` — reversible=False, DEFAULT (Rev. 4, safety first). Einbahnstraße.
-- `PseudonymizingStrategy` — reversible=True, explizites Opt-in per Profil oder
-  Request-`mode: "reversible"` (§7.2): die schwächere DSGVO-Zusage (Mapping-Tabelle
-  bleibt personenbezogen) und führt Zustand ein — nie geerbt, immer bewusst deklariert.
+- `StrictMode` — reversible=False, Auslieferungs-Default (§4.3). Auto-redigierend.
+- `PassthroughMode` — kein Verifier, keine Transformation; explizites Opt-in (§2.1).
+- `GeneralizingMode` — reversible=False. Einbahnstraße; verifiziert konsument-generalisierten Text.
+- `PseudonymizingMode` — reversible=True, explizites Opt-in per Profil oder
+  Request-`mode: "reversible"` (§7.2): die schwächere Zusage (Mapping-Tabelle bleibt
+  personenbezogen) und führt Zustand ein — nie geerbt, immer bewusst deklariert.
 
-Ein späteres drittes Verfahren (format-preserving, post-v1) ist einfach eine weitere
-`SanitizationStrategy` hinter demselben Schalter — ohne Guard/Verifier/Audit anzufassen.
+Ein späteres Verfahren (format-preserving, post-v1) ist einfach ein weiterer Modus
+hinter demselben Schalter — ohne Guard/Verifier/Audit anzufassen.
 """
 
 from __future__ import annotations
@@ -46,13 +48,13 @@ class EgressPayload:
 
 @dataclass(frozen=True)
 class Sanitized:
-    """Ergebnis von `forward()` — der Egress-Kandidat nach der Strategie."""
+    """Ergebnis von `forward()` — der Egress-Kandidat nach dem Modus."""
 
     text: str | None = None
     messages: list[dict[str, Any]] | None = None
 
     def texts(self) -> list[str]:
-        """Alle Textflächen, die der Verifier prüfen muss (Invariante 2)."""
+        """Alle Textflächen, die der Verifier prüfen muss (§5)."""
         out: list[str] = []
         if self.text is not None:
             out.append(self.text)
@@ -73,7 +75,7 @@ class Mode(Protocol):
     """Das Modus-Interface (Spec §3) — die Registry-Einheit des Schalters (Rev. 9).
 
     Ein Modus deklariert seine Eigenschaften selbst:
-    - `reversible`: trägt einen Mapping-Rückweg (nur PseudonymizingStrategy).
+    - `reversible`: trägt einen Mapping-Rückweg (nur PseudonymizingMode).
     - `enforce_verifier`: ob der Guard den deterministischen Riegel (§5) *unter* diesem
       Modus fail-closed komponiert. `True` für die Sanitisierungs-Modi (`strict`,
       `generalizing`, `pseudonymizing`), `False` für `passthrough` (§2.1). Der Modus
@@ -99,10 +101,6 @@ class Mode(Protocol):
     async def reverse_obj(self, obj: dict[str, Any], scope: Scope) -> dict[str, Any]:
         """Tool-Call-Argumente zurückmappen. NUR reversible=True."""
         ...
-
-
-# Rückwärtskompatibler Alias (Rev. 9: „Strategie" → „Modus").
-SanitizationStrategy = Mode
 
 
 # ---- Modus-Registry (Spec §3, Rev. 9) ------------------------------------------------
@@ -131,22 +129,22 @@ def _ensure_builtins() -> None:
     global _builtins_loaded
     if _builtins_loaded:
         return
-    from sluice.strategies.generalizing import GeneralizingStrategy
-    from sluice.strategies.passthrough import PassthroughStrategy
-    from sluice.strategies.pseudonymizing import PseudonymizingStrategy
-    from sluice.strategies.strict import StrictStrategy
+    from sluice.modes.generalizing import GeneralizingMode
+    from sluice.modes.passthrough import PassthroughMode
+    from sluice.modes.pseudonymizing import PseudonymizingMode
+    from sluice.modes.strict import StrictMode
 
     register_mode(
         "strict",
-        lambda p: StrictStrategy(
+        lambda p: StrictMode(
             detector_profile=p.detector_profile, dictionary_terms=p.dictionary_terms
         ),
     )
-    register_mode("passthrough", lambda p: PassthroughStrategy())
-    register_mode("generalizing", lambda p: GeneralizingStrategy())
+    register_mode("passthrough", lambda p: PassthroughMode())
+    register_mode("generalizing", lambda p: GeneralizingMode())
     register_mode(
         "pseudonymizing",
-        lambda p: PseudonymizingStrategy(ttl_seconds=p.reversible.ttl_seconds if p.reversible else 3600),
+        lambda p: PseudonymizingMode(ttl_seconds=p.reversible.ttl_seconds if p.reversible else 3600),
     )
     _builtins_loaded = True
 
@@ -182,21 +180,15 @@ def select_mode(profile: Profile) -> Mode:
     return instance
 
 
-# Rückwärtskompatibler Alias (Rev. 9).
-select_strategy = select_mode
-
-
 __all__ = [
     "EgressPayload",
     "Mode",
     "ModeFactory",
     "Sanitized",
-    "SanitizationStrategy",
     "Scope",
     "StreamReverserProtocol",
     "is_registered_mode",
     "register_mode",
     "registered_modes",
     "select_mode",
-    "select_strategy",
 ]

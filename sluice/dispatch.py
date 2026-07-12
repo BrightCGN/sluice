@@ -1,12 +1,12 @@
 """Dispatch — Guard → Provider-Adapter → (reverse) (Spec §7.3, Revision 2).
 
 Der EINZIGE Ort, der Provider-Adapter aufruft. Reihenfolge zwingend:
-erst `guarded_egress` (Gate → Strategie → Verifier → Audit, §2), erst bei
+erst `guarded_egress` (Gate → Modus → Verifier → Audit, §2), erst bei
 `released=true` geht der sanitisierte Text an den Adapter — nie davor.
 
 Antwortpfad (§7.3/§8): bei pseudonymizing läuft die Provider-Antwort durch
-`reverse_text` bzw. `stream_reverser` DERSELBEN Strategie-Instanz, die der Guard
-benutzt hat (Scope-Konsistenz über `select_strategy`-Cache).
+`reverse_text` bzw. `stream_reverser` DERSELBEN Modus-Instanz, die der Guard
+benutzt hat (Scope-Konsistenz über `select_mode`-Cache).
 """
 
 from __future__ import annotations
@@ -20,11 +20,11 @@ from sluice.audit import AuditLog
 from sluice.guard import guarded_egress
 from sluice.policy import Profile
 from sluice.providers import ProviderAdapter, select_egress_adapter
-from sluice.strategies import EgressPayload, SanitizationStrategy, Scope, select_strategy
+from sluice.modes import EgressPayload, Mode, Scope, select_mode
 
 log = structlog.get_logger("sluice.dispatch")
 
-# Muss dem Default-Scope der PseudonymizingStrategy entsprechen (dort `_DEFAULT_SCOPE`):
+# Muss dem Default-Scope des PseudonymizingMode entsprechen (dort `_DEFAULT_SCOPE`):
 # ohne expliziten Scope landen forward und reverse im selben Mapping.
 _DEFAULT_SCOPE = Scope(key="global")
 
@@ -56,24 +56,24 @@ async def _guard(
     payload: EgressPayload,
     scope: Scope | None,
     provider_target: str,
-    strategy: SanitizationStrategy | None,
+    mode: Mode | None,
     audit: AuditLog | None,
-) -> tuple[list[dict[str, object]] | None, SanitizationStrategy | None, str]:
-    """Gemeinsamer Guard-Vorlauf; gibt (sanitisierte Messages, Strategie, reason) zurück."""
+) -> tuple[list[dict[str, object]] | None, Mode | None, str]:
+    """Gemeinsamer Guard-Vorlauf; gibt (sanitisierte Messages, Modus, reason) zurück."""
     outcome = await guarded_egress(
         profile=profile,
         purpose=purpose,
         payload=payload,
         scope=scope,
         provider_target=provider_target,
-        strategy=strategy,
+        mode=mode,
         audit=audit,
     )
     if not outcome.released:
         return None, None, outcome.reason
 
     assert profile is not None  # released=true impliziert ein Profil (Invariante 1)
-    chosen = strategy if strategy is not None else select_strategy(profile)
+    chosen = mode if mode is not None else select_mode(profile)
     messages = outcome.sanitized_messages
     if messages is None:
         assert outcome.sanitized_text is not None
@@ -90,11 +90,11 @@ async def guarded_completion(
     model: str,
     scope: Scope | None = None,
     max_tokens: int = 1024,
-    strategy: SanitizationStrategy | None = None,
+    mode: Mode | None = None,
     audit: AuditLog | None = None,
     adapter: ProviderAdapter | None = None,
 ) -> CompletionOutcome:
-    """Geguardete Completion: Gate → Strategie → Verifier → Audit → Provider → reverse.
+    """Geguardete Completion: Gate → Modus → Verifier → Audit → Provider → reverse.
 
     adapter: Injektion für Tests; sonst Gateway-Adapter aus `provider_target`
     (§7.3, Rev. 7 — ohne konfiguriertes Gateway fail-closed, nie direkt).
@@ -106,7 +106,7 @@ async def guarded_completion(
         payload=payload,
         scope=scope,
         provider_target=provider_target,
-        strategy=strategy,
+        mode=mode,
         audit=audit,
     )
     if messages is None or chosen is None:
@@ -143,7 +143,7 @@ async def guarded_stream(
     model: str,
     scope: Scope | None = None,
     max_tokens: int = 1024,
-    strategy: SanitizationStrategy | None = None,
+    mode: Mode | None = None,
     audit: AuditLog | None = None,
     adapter: ProviderAdapter | None = None,
 ) -> StreamOutcome:
@@ -159,7 +159,7 @@ async def guarded_stream(
         payload=payload,
         scope=scope,
         provider_target=provider_target,
-        strategy=strategy,
+        mode=mode,
         audit=audit,
     )
     if messages is None or chosen is None:

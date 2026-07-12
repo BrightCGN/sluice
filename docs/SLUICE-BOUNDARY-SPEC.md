@@ -50,7 +50,7 @@
 > **Bezug:** Temper-Brief §5.14 (Egress-Guard), §5.8 (Modell-Routing), Prinzip 11/13/16
 > (Souveränität, append-only Audit, Egress technisch unterbunden).
 > **Nachbarn:** `openclaude/docs/PRISMCLAW-GATEWAY.md` (Routing/Failover — bleibt getrennt),
-> `openclaude/docs/PRISMCLAW-ANONYMIZATION.md` (Herkunft der reversiblen Strategie).
+> `openclaude/docs/PRISMCLAW-ANONYMIZATION.md` (Herkunft des reversiblen Modus).
 > **Status jedes Abschnitts:** normativ, sofern nicht als *(offen)* / *(post-v1)* markiert.
 
 ---
@@ -98,7 +98,7 @@ Konsument (im Perimeter)
 
 **Souveränitäts-Story (Revision 2, bewusst festgehalten):** Ursprünglich sollte Sluice nur
 sanitisieren und das PrismClaw-Gateway routen. Mit Revision 2 übernimmt Sluice die
-Provider-Kommunikation selbst — der Provider-Aufruf liegt damit *hinter* Gate, Strategie,
+Provider-Kommunikation selbst — der Provider-Aufruf liegt damit *hinter* Gate, Modus,
 Verifier und Audit im selben Prozess. Die zentrale Zusage bleibt unverändert: **kein
 Provider-Adapter wird je mit unverifiziertem Text aufgerufen**; der Adapter ist die letzte
 Schicht der Kette, nicht ein Bypass daran vorbei. Der Trade-off dieser Änderung ist ebenso
@@ -126,7 +126,7 @@ Sluice, muss es jede Konsumenten-Semantik kennen — und man baut es doch wieder
 
 ---
 
-## 2. Der zentrale Befund: zwei Strategien, ein Schalter
+## 2. Der zentrale Befund: zwei Modi, ein Schalter
 
 Der Vergleich der zwei Referenzimplementierungen zeigt **keinen Reifegefälle, sondern zwei
 funktionsgetriebene Gegensätze** — beide berechtigt:
@@ -141,14 +141,17 @@ funktionsgetriebene Gegensätze** — beide berechtigt:
 | Primärer Fall | Temper, Crate, Bank-Tool | Aider / Code-Dogfooding |
 | Integrationsform (§7) | konsument-vermittelt (Guard-Call) | proxy-vermittelt (transparenter Endpoint) |
 
-Diese zwei Referenz-Implementierungen sind seit Rev. 9 **zwei Modi in der Registry** (§3) — der
+Diese zwei Referenz-Implementierungen sind seit Rev. 9 **zwei Modi unter mehreren in der
+Registry** (§3) — Herkunft: Temper → `generalizing`, PrismClaw → `pseudonymizing`. Der
 **Schalter** wählt eine *Modus-Implementierung* aus der Registry, kein `if reversible:` im Guard:
 
 ```
-SanitizationStrategy (Interface)
-  ├─ GeneralizingStrategy    → forward() nur; kein Reverse-Leg          [DEFAULT, Rev. 4]
-  └─ PseudonymizingStrategy  → forward() + reverse() + stream_reverser
-                               + tool_arg_reversal + Mapping-Lebenszyklus
+Mode (Protocol, Registry — §3)          # vormals SanitizationStrategy, Rev. 9 umbenannt
+  ├─ strict          → auto-redigiert + Verifier fail-closed; irreversibel   [DEFAULT, §4.3]
+  ├─ passthrough     → Identität; kein Verifier, keine Transformation (§2.1)
+  ├─ generalizing    → forward() nur; verifiziert konsument-generalisierten Text
+  └─ pseudonymizing  → forward() + reverse() + stream_reverser
+                       + tool_arg_reversal + Mapping-Lebenszyklus (reversible=True)
 ```
 
 **Früher „drei Invarianten" — jetzt das Verhalten des `strict`-Modus (Rev. 9).** Bis Rev. 8
@@ -322,7 +325,7 @@ was ohne explizite Wahl passiert.
 
 ### 4.2 `egress_enabled = false` = souveränes Profil
 Maschinenlesbare Form von Prinzip 16 (Tempers `policy.py`). Guard lässt **nichts** durch,
-egal welche Strategie — der Riegel greift *vor* der Strategie-Auswahl.
+egal welcher Modus — der Riegel greift *vor* der Modus-Auswahl.
 
 ### 4.3 Default-Deny & sicherer Default-Modus
 Ein Konsument **ohne** Profil bekommt **nichts** raus. Kein Vererben fremder Profile.
@@ -421,7 +424,7 @@ Wo geschrieben wird, ist der Sink **append-only** (Prinzip 13). Der Detailgrad i
 ## 7. Der Vertrag: Konsument ↔ Sluice
 
 Der Schalter wählt nicht nur einen Algorithmus, sondern eine **Integrationsform**. Beide
-Formen münden in denselben geguardeten Kern (Profil-Gate → Strategie → Verifier → Audit).
+Formen münden in denselben geguardeten Kern (Profil-Gate → Modus → Verifier → Audit).
 
 ### 7.1 Generalizing = konsument-vermittelt (Guard-Call-API)
 Der Konsument besitzt die semantische Generalisierung (Domänenlogik). Er ruft Sluice als
@@ -489,7 +492,7 @@ Die Allowlist (§4.1) begrenzt pro Profil, welche erlaubt sind.
 - **Timeouts:** endlicher Connect-Timeout, **kein Read-Timeout** (agentische Turns streamen
   lange) — wie im übrigen Code.
 - **Antwortpfad:** bei `pseudonymizing` läuft die Provider-Antwort durch `reverse_text` /
-  `stream_reverser` / `reverse_obj` derselben Strategie-Instanz (Scope-Konsistenz, §8).
+  `stream_reverser` / `reverse_obj` derselben Modus-Instanz (Scope-Konsistenz, §8).
 - **Failover/Health/Tenant-Order:** *(post-v1)* — v1 ruft genau den einen per Profil
   erlaubten und vom Konsumenten gewählten Provider.
 - **Eigenständige Gateway-Services (Revision 6):** jedes Provider-Gateway ist ein
@@ -531,10 +534,10 @@ und eine Kompatibilitätszusage von Beginn an, sonst wird jedes Update zur Drei-
 
 ---
 
-## 8. Mapping-Lebenszyklus (nur PseudonymizingStrategy)
+## 8. Mapping-Lebenszyklus (nur pseudonymizing-Modus)
 
 Der Zustand, den der reversible Modus einführt und der generalisierende nie hat. Ehrlicher
-Zusatzaufwand — der Schalter macht die *Auswahl* billig, nicht die Strategie selbst.
+Zusatzaufwand — der Schalter macht die *Auswahl* billig, nicht den Modus selbst.
 
 - **Scope:** session-gebunden. Gleicher Roh-Wert → gleiches Pseudonym **innerhalb** des Scope
   (Konsistenz über den Dialog), verschiedene Scopes teilen kein Mapping.
@@ -556,17 +559,17 @@ migrieren. Nicht drei Repos in einem Rutsch.** Verhalten erhalten, bestehende Te
 im Stack frei ist (es gibt eine Rust-Crate `sluice`; im Python-/Homelab-Umfeld unkritisch).
 
 **Phase 1 — Kern (Mechanismus).**
-- `sluice/guard.py` ← Tempers `egress/guard.py` (Orchestrierung: Gate → Strategie → Verifier → Audit).
+- `sluice/guard.py` ← Tempers `egress/guard.py` (Orchestrierung: Gate → Modus → Verifier → Audit).
 - `sluice/policy.py` ← Tempers `egress/policy.py`, erweitert um das Profil-Schema (§4).
 - `sluice/verifier.py` ← Tempers `egress/verifier.py` **unverändert im Kern**; Muster in
   Detektor-Profile (§5.1) ausgelagert.
 - `sluice/audit.py` ← `egress_log`, append-only (§6) — löst Tempers TODO ein.
 
-**Phase 2 — Strategien.**
-- `sluice/strategies/generalizing.py` ← forward-only (aus Tempers Datenfluss).
-- `sluice/strategies/pseudonymizing.py` ← PrismClaws `prismclaw.anon`: `forward_messages`,
+**Phase 2 — Modi.**
+- `sluice/modes/generalizing.py` ← forward-only (aus Tempers Datenfluss).
+- `sluice/modes/pseudonymizing.py` ← PrismClaws `prismclaw.anon`: `forward_messages`,
   `reverse_text`, `stream_reverser` (Holdback), `reverse_obj`, `scope`/TTL (§8).
-- `SanitizationStrategy`-Interface (§3); Auswahl über Profil.
+- `Mode`-Interface (§3); Auswahl über Profil.
 
 **Phase 3 — Schnittstellen.**
 - `/v1/egress/guard` (§7.1) und der Proxy-Endpoint `/v1/responses` + `/v1/chat/completions` (§7.2).
@@ -594,7 +597,7 @@ ihnen operieren.
 
 - **Mapping-Persistenz** (§8): v1 in-memory; `persistent` mit DSGVO-Vorbehalt — *(offen)*.
 - **Genericity-Check** (§5.2, Re-ID durch Kombination) — *(post-v1)*.
-- **Format-preserving Strategy** fürs Bank-Tool als dritte `SanitizationStrategy` — *(post-v1)*.
+- **Format-preserving-Modus** fürs Bank-Tool als weiterer registrierter Modus (§3) — *(post-v1)*.
 - **`egress_log`-Persistenz** über reines Logging hinaus — *(post-v1)*.
 - **mTLS Konsument ↔ Sluice** als Härtung (heute VLAN-firewalled) — *(post-v1)*.
 - **Bank-Tool-Lesezugriff** (FinTS/HBCI/Aggregator) ist eine *separate* Sicherheitsfläche,

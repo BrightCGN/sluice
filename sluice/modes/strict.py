@@ -1,4 +1,4 @@
-"""StrictStrategy — auto-redigierend, Auslieferungs-Default (Spec §3/§4.3, Rev. 9).
+"""StrictMode — auto-redigierend, Auslieferungs-Default (Spec §3/§4.3, Rev. 9).
 
 Der sichere Default-Modus: `forward()` fährt selbst die Detektor-Engine (§5.1) über den
 *Rohtext*, ersetzt jeden Treffer durch einen typisierten Platzhalter (`[IP]`, `[EMAIL]`,
@@ -18,11 +18,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from sluice.strategies import EgressPayload, Sanitized, Scope, StreamReverserProtocol
+from sluice.modes import EgressPayload, Sanitized, Scope, StreamReverserProtocol
 from sluice.verifier import redact_identifiers
 
 
-class StrictStrategy:
+class StrictMode:
     reversible = False
     name = "strict"
     enforce_verifier = True  # der Verifier ist der harte Boden unter der Redaktion (§5)
@@ -56,10 +56,10 @@ class StrictStrategy:
         return {**message, "content": self._redact(content)}
 
     async def reverse_text(self, text: str, scope: Scope) -> str:
-        raise NotImplementedError("StrictStrategy ist irreversibel (Auto-Redaktion, §3).")
+        raise NotImplementedError("StrictMode ist irreversibel (Auto-Redaktion, §3).")
 
     def stream_reverser(self, scope: Scope) -> StreamReverserProtocol:
-        raise NotImplementedError("StrictStrategy ist irreversibel (Auto-Redaktion, §3).")
+        raise NotImplementedError("StrictMode ist irreversibel (Auto-Redaktion, §3).")
 
     async def reverse_obj(self, obj: dict[str, Any], scope: Scope) -> dict[str, Any]:
-        raise NotImplementedError("StrictStrategy ist irreversibel (Auto-Redaktion, §3).")
+        raise NotImplementedError("StrictMode ist irreversibel (Auto-Redaktion, §3).")

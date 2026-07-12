@@ -10,7 +10,7 @@ from __future__ import annotations
 from sluice.audit import AuditLog
 from sluice.guard import guarded_egress
 from sluice.policy import Profile
-from sluice.strategies import EgressPayload, is_registered_mode, registered_modes
+from sluice.modes import EgressPayload, is_registered_mode, registered_modes
 
 STRICT = Profile(
     name="default-consumer",

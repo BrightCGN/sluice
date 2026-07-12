@@ -1,6 +1,6 @@
-# Claude-Code-Auftrag — Sluice, Phase 1 + 2 (Kern + Strategien)
+# Claude-Code-Auftrag — Sluice, Phase 1 + 2 (Kern + Modi)
 
-> **Scope dieses Auftrags:** NUR den Sanitisierungs-Kern und die zwei Strategien als
+> **Scope dieses Auftrags:** NUR den Sanitisierungs-Kern und die zwei Modi als
 > testbare Library bauen — **vor** jeder Netzwerk-Oberfläche. HTTP-Endpoints (Phase 3),
 > Konsumenten-Migration (Phase 4) und Aufräumen (Phase 5) sind **explizit nicht Teil dieses
 > Auftrags**.
@@ -30,11 +30,11 @@ kein Sluice-Thema).
 
 Baue die geguardete Kette. Der Schalter verändert diese Schichten nie (CLAUDE.md, drei Invarianten).
 
-- **`sluice/guard.py`** — `guarded_egress(...)`: Profil-Gate → `strategy.forward()` → Verifier →
+- **`sluice/guard.py`** — `guarded_egress(...)`: Profil-Gate → `mode.forward()` → Verifier →
   Audit. Gibt ein `EgressOutcome(released, sanitized_text, reason)` zurück. Struktur aus Tempers
-  `guard.py` übernehmen, aber Strategie-Aufruf einziehen (statt fest generalisierend).
+  `guard.py` übernehmen, aber Modus-Aufruf einziehen (statt fest generalisierend).
 - **`sluice/policy.py`** — `check_egress_allowed(profile, purpose)` + das **Profil-Schema** aus
-  Spec §4 laden (TOML): `strategy`, `egress_enabled`, `allowed_purposes`, `provider_allowlist`,
+  Spec §4 laden (TOML): `mode` (Alias `strategy`), `egress_enabled`, `allowed_purposes`, `provider_allowlist`,
   `detector_profile`, und für pseudonymizing der `[reversible]`-Block (`scope`, `ttl_seconds`,
   `storage`). Souveränes Profil (`egress_enabled=false`) → alles zu. Default-Deny bei fehlendem
   Profil.
@@ -46,21 +46,21 @@ Baue die geguardete Kette. Der Schalter verändert diese Schichten nie (CLAUDE.m
   (infra + interne Repo-/Package-Namen, Env-Werte), `media` (leicht), `financial` (IBAN/BIC,
   Kontonummern, strenger — Muster-Gerüst genügt, Feinschliff ist spätere Profil-Arbeit).
 - **`sluice/audit.py`** — `egress_log`-Writer, append-only. Pro Eintrag: `timestamp, profile,
-  purpose, strategy, released, reason, before(raw), after(sanitized), provider_target,
+  purpose, mode, released, reason, before(raw), after(sanitized), provider_target,
   verifier_findings[]`. Löst Tempers `TODO(post-v1)` in `_log_egress` ein. v1: strukturiertes
   Logging + in-memory Append-Store; Persistenz ist post-v1.
 
 ---
 
-## 2. Phase 2 — Strategien
+## 2. Phase 2 — Modi
 
-- **`sluice/strategies/__init__.py`** — `SanitizationStrategy` (Protocol, Spec §3) mit
+- **`sluice/modes/__init__.py`** — `Mode` (Protocol, Spec §3) mit
   `reversible: bool`, `forward()`, `reverse_text()`, `stream_reverser()`, `reverse_obj()`.
-  Plus eine Auswahl-Funktion, die aus `profile.strategy` die Implementierung zieht.
-- **`sluice/strategies/generalizing.py`** — `reversible=False`. `forward()` verifiziert den vom
+  Plus eine Auswahl-Funktion (`select_mode`), die aus `profile.mode` die Implementierung zieht.
+- **`sluice/modes/generalizing.py`** — `reversible=False`. `forward()` verifiziert den vom
   Konsumenten gelieferten *generalisierten* Text (die Generalisierung selbst macht der Konsument —
   NICHT hier, CLAUDE.md/Mechanismus-vs-Domäne). Reverse-Methoden → `NotImplementedError`.
-- **`sluice/strategies/pseudonymizing.py`** — `reversible=True`. Vollständig aus PrismClaws `anon`:
+- **`sluice/modes/pseudonymizing.py`** — `reversible=True`. Vollständig aus PrismClaws `anon`:
   - `forward()` / forward über Message-Liste — konsistentes Pseudonym pro Roh-Wert **innerhalb
     des Scope**.
   - `reverse_text()` — Rückweg.
@@ -81,7 +81,7 @@ Pflicht-Fälle:
 - [ ] **Verifier gleich streng in beiden Modi** — derselbe roh-durchgeschmuggelte Identifier wird
       sowohl bei `generalizing` als auch bei `pseudonymizing` blockiert.
 - [ ] **Default-Deny** — Egress ohne deklariertes Profil → nichts raus.
-- [ ] **Souveränes Profil** — `egress_enabled=false` → nichts raus, unabhängig von der Strategie.
+- [ ] **Souveränes Profil** — `egress_enabled=false` → nichts raus, unabhängig vom Modus.
 - [ ] **Streaming-Holdback** — Pseudonym, das über zwei SSE-Chunks gesplittet ankommt, wird korrekt
       zurückgemappt.
 - [ ] **Tool-Arg-Reversal** — Tool-Argumente kommen in echten Werten bei der (gemockten) Ausführung an.
@@ -99,7 +99,7 @@ Pflicht-Fälle:
 - **Keine** Änderung an Temper, Crate oder PrismClaw — Konsumenten-Migration ist Phase 4.
 - **Keine** semantische Generalisierung in Sluice — das bleibt Konsumenten-Domäne.
 - **Kein** Anfassen der Provider-Routing/Failover-Logik.
-- **Kein** Genericity-/Re-ID-Check, keine Mapping-Persistenz, keine format-preserving Strategie
+- **Kein** Genericity-/Re-ID-Check, keine Mapping-Persistenz, kein format-preserving-Modus
   (alles post-v1, Spec §10).
 
 ---

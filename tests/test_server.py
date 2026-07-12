@@ -117,7 +117,7 @@ async def test_completions_pseudonymizing_profile_roundtrip() -> None:
     client, _ = _client(adapter)
     resp = await client.post(
         "/v1/chat/completions",
-        json=BODY,  # kein mode/purpose/provider — Profil-Strategie und Defaults greifen
+        json=BODY,  # kein mode/purpose/provider — Profil-Modus und Defaults greifen
         headers={"X-Sluice-Profile": "aider-code", "X-Sluice-Scope": "s-http-1"},
     )
     assert resp.status_code == 200

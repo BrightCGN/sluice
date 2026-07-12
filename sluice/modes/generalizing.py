@@ -1,4 +1,4 @@
-"""GeneralizingStrategy — Einbahnstraße, DEFAULT (Spec §3).
+"""GeneralizingMode — Einbahnstraße (Spec §3).
 
 Herkunft: Tempers egress/-Datenfluss (guard.py ruft nur verify_no_identifiers).
 `reversible=False`: irreversibel → aus DSGVO-Scope, zustandslos.
@@ -13,10 +13,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from sluice.strategies import EgressPayload, Sanitized, Scope, StreamReverserProtocol
+from sluice.modes import EgressPayload, Sanitized, Scope, StreamReverserProtocol
 
 
-class GeneralizingStrategy:
+class GeneralizingMode:
     reversible = False
     name = "generalizing"
     enforce_verifier = True  # der Verifier greift unter diesem Modus fail-closed (§5)
@@ -36,15 +36,15 @@ class GeneralizingStrategy:
         if payload.messages is not None:
             return Sanitized(messages=payload.messages)
         raise ValueError(
-            "GeneralizingStrategy braucht payload.generalized_text oder payload.messages — "
+            "GeneralizingMode braucht payload.generalized_text oder payload.messages — "
             "die semantische Generalisierung macht der Konsument (§1.1), Sluice verifiziert nur."
         )
 
     async def reverse_text(self, text: str, scope: Scope) -> str:
-        raise NotImplementedError("GeneralizingStrategy ist irreversibel (Einbahnstraße, §3).")
+        raise NotImplementedError("GeneralizingMode ist irreversibel (Einbahnstraße, §3).")
 
     def stream_reverser(self, scope: Scope) -> StreamReverserProtocol:
-        raise NotImplementedError("GeneralizingStrategy ist irreversibel (Einbahnstraße, §3).")
+        raise NotImplementedError("GeneralizingMode ist irreversibel (Einbahnstraße, §3).")
 
     async def reverse_obj(self, obj: dict[str, Any], scope: Scope) -> dict[str, Any]:
-        raise NotImplementedError("GeneralizingStrategy ist irreversibel (Einbahnstraße, §3).")
+        raise NotImplementedError("GeneralizingMode ist irreversibel (Einbahnstraße, §3).")

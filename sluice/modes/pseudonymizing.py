@@ -1,4 +1,4 @@
-"""PseudonymizingStrategy — forward + reverse, explizites Opt-in (Spec §3/§8).
+"""pseudonymizing-Modus — forward + reverse, explizites Opt-in (Spec §3/§8).
 
 Herkunft: PrismClaws `prismclaw.anon` (detect.py, mapping.py, stream.py), vollständig
 portiert. Verhalten erhalten; angepasst wurde nur der Storage: v1 ist `memory`
@@ -22,9 +22,9 @@ from typing import Any
 
 import structlog
 
-from sluice.strategies import EgressPayload, Sanitized, Scope
+from sluice.modes import EgressPayload, Sanitized, Scope
 
-log = structlog.get_logger("sluice.strategies.pseudonymizing")
+log = structlog.get_logger("sluice.modes.pseudonymizing")
 
 TOKEN_OPEN = "⟦"
 TOKEN_CLOSE = "⟧"
@@ -223,7 +223,7 @@ class ScopeMap:
         return StreamReverser(self._lookup)
 
 
-# ---- Die Strategie (Spec §3, reversible=True) ------------------------------------------
+# ---- Der Modus (Spec §3, reversible=True) ----------------------------------------------
 
 
 @dataclass
@@ -232,7 +232,7 @@ class _ScopeEntry:
     created: float
 
 
-class PseudonymizingStrategy:
+class PseudonymizingMode:
     """reversible=True — explizites Opt-in (Spec §2): schwächere DSGVO-Zusage
     (die Mapping-Tabelle bleibt personenbezogen) und session-scoped Zustand (§8).
     """
@@ -275,7 +275,7 @@ class PseudonymizingStrategy:
         if self._scopes.pop(scope.key, None) is not None:
             log.info("pseudonymizing.scope_ended", scope=scope.key)
 
-    # ---- SanitizationStrategy (§3) -----------------------------------------------------
+    # ---- Mode (§3) ---------------------------------------------------------------------
 
     async def forward(self, payload: EgressPayload, scope: Scope | None) -> Sanitized:
         """Roh → pseudonymisiert; konsistentes Pseudonym pro Roh-Wert innerhalb des Scope."""

@@ -6,7 +6,7 @@ kommunizieren. Versionierte Schnittstelle ab Tag 1 (§7.4): alle Pfade unter `/v
 Endpunkte:
 - `POST /v1/egress/guard`      — Guard-only (§7.1): sanitisieren + verifizieren,
                                  der Konsument dispatcht selbst.
-- `POST /v1/chat/completions`  — Voll-Proxy (§7.2): Gate → Strategie → Verifier →
+- `POST /v1/chat/completions`  — Voll-Proxy (§7.2): Gate → Modus → Verifier →
                                  Audit → Provider-Adapter → (reverse), inkl. SSE-Streaming.
 - `GET  /v1/health`            — Liveness.
 
@@ -57,7 +57,7 @@ from sluice.providers import (
     canonical_provider,
     select_egress_adapter,
 )
-from sluice.strategies import EgressPayload, Scope, is_registered_mode
+from sluice.modes import EgressPayload, Scope, is_registered_mode
 
 log = structlog.get_logger("sluice.server")
 
