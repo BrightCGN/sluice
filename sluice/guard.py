@@ -1,17 +1,18 @@
-"""Egress-Guard — orchestriert Gate → Strategie → Verifier → Audit (Spec §2).
+"""Egress-Guard — orchestriert Gate → Modus → (Verifier) → Audit (Spec §2, Rev. 9).
 
 Der EINZIGE Pfad nach außen. Jeder ausgehende Datenpfad aller Konsumenten läuft
 durch diese Kette, bevor er die Kundengrenze überquert. Kein Modul ruft je direkt
 nach außen.
 
-Die drei Invarianten, die der Strategie-Schalter NIE verändert (Spec §2):
+Der Modus-Schalter (Rev. 9) zieht den Modus aus der Registry (§3); der Guard bleibt
+darüber gleich. Was der `strict`-Default garantiert (§2, früher „drei Invarianten"):
 1. Profil-Gate zuerst — kein Profil → nichts raus (Default-Deny, §4.3);
-   `egress_enabled=false` → nichts raus, egal welche Strategie (§4.2).
-2. Verifier gleich streng in beiden Modi — die Schicht *unter* der Strategie (§5).
-3. Audit bei jedem Durchlass — append-only, released *und* blocked (§6).
+   `egress_enabled=false` → nichts raus, egal welcher Modus (§4.2).
+2. Verifier — als Baustein, den der Modus komponiert (`enforce_verifier`, §5).
+   `strict`/`generalizing`/`pseudonymizing`: fail-closed. `passthrough`: bewusst ohne (§2.1).
+3. Audit — Detailgrad wählt der Betreiber (`off|metadata|full`, §6).
 
-Herkunft: Tempers egress/guard.py, mit eingezogenem Strategie-Aufruf
-(statt fest generalisierend).
+Herkunft: Tempers egress/guard.py, mit eingezogenem Modus-Aufruf (statt fest generalisierend).
 """
 
 from __future__ import annotations
@@ -23,8 +24,13 @@ import structlog
 
 from sluice.audit import AuditLog
 from sluice.audit import egress_log as _default_audit
-from sluice.policy import Profile, check_egress_allowed, check_provider_allowed
-from sluice.strategies import EgressPayload, Sanitized, SanitizationStrategy, Scope, select_strategy
+from sluice.policy import (
+    Profile,
+    check_egress_allowed,
+    check_mode_allowed,
+    check_provider_allowed,
+)
+from sluice.strategies import EgressPayload, Mode, Sanitized, Scope, select_mode
 from sluice.verifier import verify_no_identifiers
 
 log = structlog.get_logger("sluice.guard")
@@ -45,7 +51,7 @@ async def guarded_egress(
     payload: EgressPayload,
     scope: Scope | None = None,
     provider_target: str | None = None,
-    strategy: SanitizationStrategy | None = None,
+    strategy: Mode | None = None,
     audit: AuditLog | None = None,
 ) -> EgressOutcome:
     """Lässt Inhalt NUR durch, wenn Profil-Gate **und** Verifier zustimmen (Spec §2).
@@ -59,13 +65,13 @@ async def guarded_egress(
     audit:           Injektion für Tests; sonst das eine prozessweite egress_log (§6).
     """
     audit_log = audit if audit is not None else _default_audit
-    strategy_name = profile.strategy if profile is not None else None
+    mode_name = profile.mode if profile is not None else None
 
     def _blocked(reason: str, findings: tuple[str, ...] = ()) -> EgressOutcome:
         audit_log.append(
             profile=profile.name if profile is not None else None,
             purpose=purpose,
-            strategy=strategy_name,
+            mode=mode_name,
             released=False,
             reason=reason,
             before=payload.raw_text,
@@ -75,7 +81,7 @@ async def guarded_egress(
         )
         return EgressOutcome(released=False, sanitized_text=None, reason=reason)
 
-    # 1. Profil-Gate (Invariante 1) — greift *vor* der Strategie-Auswahl.
+    # 1. Profil-Gate (Invariante 1) — greift *vor* der Modus-Auswahl.
     decision = check_egress_allowed(profile, purpose)
     if not decision.allowed:
         return _blocked(decision.reason)
@@ -86,27 +92,36 @@ async def guarded_egress(
         if not provider_decision.allowed:
             return _blocked(provider_decision.reason)
 
-    # 2. Strategie (der Schalter tauscht nur dieses Objekt, §2).
-    chosen = strategy if strategy is not None else select_strategy(profile)
+    # Modus-Allowlist (§4.1, Rev. 9) — ein per Profil gesperrter Modus wird fail-closed
+    # abgewiesen, auch wenn ein Request ihn wählt.
+    mode_decision = check_mode_allowed(profile, profile.mode)
+    if not mode_decision.allowed:
+        return _blocked(mode_decision.reason)
+
+    # 2. Modus (der Schalter zieht ihn aus der Registry, §3).
+    chosen = strategy if strategy is not None else select_mode(profile)
     sanitized: Sanitized = await chosen.forward(payload, scope)
 
     texts = sanitized.texts()
     if not texts:
         return _blocked("Kein Egress-Kandidat vorhanden (fail-closed).")
 
-    # 3. Harter, deterministischer Riegel — gleich streng in BEIDEN Modi (Invariante 2).
-    findings: list[str] = []
-    for text in texts:
-        verification = verify_no_identifiers(text, profile.detector_profile)
-        findings.extend(verification.findings)
-    if findings:
-        return _blocked(f"Verifier blockiert: {', '.join(findings)}", tuple(findings))
+    # 3. Deterministischer Riegel — nur wenn der Modus ihn komponiert (Rev. 9, §5).
+    #    `strict`/`generalizing`/`pseudonymizing`: fail-closed. `passthrough`: bewusst
+    #    ohne Verifier — der Konsument trägt das Risiko (§2.1).
+    if chosen.enforce_verifier:
+        findings: list[str] = []
+        for text in texts:
+            verification = verify_no_identifiers(text, profile.detector_profile)
+            findings.extend(verification.findings)
+        if findings:
+            return _blocked(f"Verifier blockiert: {', '.join(findings)}", tuple(findings))
 
-    # 4. Durchlass — append-only protokollieren (Invariante 3, reviewbares Vorher/Nachher).
+    # 4. Durchlass — protokollieren nach Betreiber-Audit-Level (Invariante-3-Verhalten, §6).
     audit_log.append(
         profile=profile.name,
         purpose=purpose,
-        strategy=chosen.name,
+        mode=chosen.name,
         released=True,
         reason="clean",
         before=payload.raw_text,

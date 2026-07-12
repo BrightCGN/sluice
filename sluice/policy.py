@@ -3,7 +3,12 @@
 Das Profil ist die vollständige, auditierbare Form der Egress-Erlaubnis eines
 Konsumenten. Default-Deny (§4.3): kein Profil → nichts raus, kein Vererben fremder
 Profile. Souveränes Profil (§4.2): `egress_enabled=false` → Guard lässt **nichts**
-durch, egal welche Strategie — der Riegel greift *vor* der Strategie-Auswahl.
+durch, egal welcher Modus — der Riegel greift *vor* der Modus-Auswahl.
+
+Rev. 9: Das Profil wählt einen **Modus** aus der Registry (Spec §3, `mode`); das alte
+Feld `strategy` bleibt Parse-Alias und Lese-Property. Fehlt `mode`, gilt der **sichere
+Default `strict`** (§4.3), nie `passthrough`. `allowed_modes` (§4.1) begrenzt optional,
+welche Modi ein Request wählen darf (Default: alle erlaubt).
 
 Herkunft: Tempers egress/policy.py, erweitert um das maschinenlesbare
 TOML-Profil-Schema aus Spec §4.
@@ -15,7 +20,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-VALID_STRATEGIES = ("generalizing", "pseudonymizing")
+DEFAULT_MODE = "strict"  # sicherer Auslieferungs-Default (Rev. 9, §4.3)
 VALID_STORAGE = ("memory",)  # persistent ist post-v1 (Spec §8/§10)
 
 
@@ -33,12 +38,18 @@ class Profile:
     """Ein Konsumenten-Profil — der Schalter, maschinenlesbar (Spec §4)."""
 
     name: str
-    strategy: str = "generalizing"  # Default (Rev. 4, safety first); pseudonymizing = Opt-in (§2)
+    mode: str = DEFAULT_MODE  # Registry-Modus (§3); Default `strict` (Rev. 9, safety first, §4.3)
     egress_enabled: bool = True
     allowed_purposes: tuple[str, ...] = ()
     provider_allowlist: tuple[str, ...] = ()
+    allowed_modes: tuple[str, ...] = ()  # leer = alle Modi erlaubt (§4.1, Rev. 9)
     detector_profile: str = "infra"
     reversible: ReversibleConfig | None = None
+
+    @property
+    def strategy(self) -> str:
+        """Rückwärtskompatibler Lese-Alias auf `mode` (Rev. 9)."""
+        return self.mode
 
 
 @dataclass(frozen=True)
@@ -84,17 +95,40 @@ def check_provider_allowed(profile: Profile, provider: str) -> EgressDecision:
     return EgressDecision(allowed=True, reason=f"Provider '{provider}' erlaubt.")
 
 
+def check_mode_allowed(profile: Profile, mode: str) -> EgressDecision:
+    """Modus-Allowlist pro Profil (Spec §4.1, Rev. 9).
+
+    Leere `allowed_modes` = alle Modi erlaubt (Default, maximale Freiheit). Sonst muss
+    der gewählte Modus explizit gelistet sein — ein Betreiber sperrt so schwache Modi
+    (z. B. `passthrough`) gezielt; nicht erlaubt ⇒ fail-closed.
+    """
+    if profile.allowed_modes and mode not in profile.allowed_modes:
+        return EgressDecision(
+            allowed=False,
+            reason=f"Modus '{mode}' nicht in allowed_modes von '{profile.name}' (§4.1).",
+        )
+    return EgressDecision(allowed=True, reason=f"Modus '{mode}' erlaubt.")
+
+
 def parse_profiles(toml_text: str) -> dict[str, Profile]:
     """Parst das Profil-Schema aus Spec §4 (TOML). Validiert fail-closed beim Laden."""
+    from sluice.strategies import is_registered_mode  # lazy: vermeidet Import-Zyklus
+
     data = tomllib.loads(toml_text)
     profiles: dict[str, Profile] = {}
     for name, raw in data.get("profile", {}).items():
-        strategy = raw.get("strategy", "generalizing")  # Default irreversibel (Rev. 4, §2)
-        if strategy not in VALID_STRATEGIES:
-            raise ValueError(f"Profil '{name}': unbekannte Strategie '{strategy}'.")
+        # `mode` ist kanonisch (Rev. 9); `strategy` bleibt Alias. Fehlt beides → `strict` (§4.3).
+        mode = raw.get("mode", raw.get("strategy", DEFAULT_MODE))
+        if not is_registered_mode(mode):
+            raise ValueError(f"Profil '{name}': unbekannter Modus '{mode}' (§3).")
+
+        allowed_modes = tuple(raw.get("allowed_modes", ()))
+        for m in allowed_modes:
+            if not is_registered_mode(m):
+                raise ValueError(f"Profil '{name}': allowed_modes nennt unbekannten Modus '{m}' (§3).")
 
         reversible: ReversibleConfig | None = None
-        if strategy == "pseudonymizing":
+        if mode == "pseudonymizing":
             rev = raw.get("reversible", {})
             storage = rev.get("storage", "memory")
             if storage not in VALID_STORAGE:
@@ -109,10 +143,11 @@ def parse_profiles(toml_text: str) -> dict[str, Profile]:
 
         profiles[name] = Profile(
             name=name,
-            strategy=strategy,
+            mode=mode,
             egress_enabled=bool(raw.get("egress_enabled", True)),
             allowed_purposes=tuple(raw.get("allowed_purposes", ())),
             provider_allowlist=tuple(raw.get("provider_allowlist", ())),
+            allowed_modes=allowed_modes,
             detector_profile=raw.get("detector_profile", "infra"),
             reversible=reversible,
         )

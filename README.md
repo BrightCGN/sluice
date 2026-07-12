@@ -1,8 +1,10 @@
 # Sluice
 
-Die **eine gemeinsame Sanitisierungs-Boundary**, durch die jeder ausgehende Datenpfad
-aller Projekte läuft, bevor er die Kundengrenze überquert. Sluice sitzt **vor** dem
-PrismClaw-Routing-Gateway: Sluice sanitisiert, das Gateway routet.
+Ein **erweiterbares Egress-Sanitisierungs-Framework** (Rev. 9): eine gemeinsame
+Sanitisierungs-Boundary, durch die ein ausgehender Datenpfad läuft, bevor er die
+Kundengrenze überquert. Sluice ist ein **technischer** Egress-Riegel — **kein
+Compliance-Zertifikat**; welche rechtliche Aussage ein Betreiber daraus ableitet, ist
+dessen Sache, nicht Sluices Versprechen.
 
 **Wahrheitsquelle für alle Design-Entscheidungen: [`docs/SLUICE-BOUNDARY-SPEC.md`](docs/SLUICE-BOUNDARY-SPEC.md).**
 Leitplanken für die Arbeit am Repo: [`CLAUDE.md`](CLAUDE.md).
@@ -12,31 +14,36 @@ Leitplanken für die Arbeit am Repo: [`CLAUDE.md`](CLAUDE.md).
 Jeder Egress läuft durch dieselbe geguardete Kette:
 
 ```
-Profil-Gate (§4) → Strategie (§3) → Verifier (§5) → Audit (§6)
+Profil-Gate (§4) → Modus (§3, Registry) → (Verifier §5) → Audit (§6)
 ```
 
-Drei Invarianten, die der Strategie-Schalter nie verändert:
+Der **`strict`-Default** (auto-redigierend) garantiert, was bis Rev. 8 die „drei
+Invarianten" waren:
 
-1. **Profil-Gate zuerst** — kein Profil → nichts raus (Default-Deny); `egress_enabled=false` → nichts raus.
-2. **Verifier gleich streng in beiden Modi** — der deterministische Riegel liegt *unter* der Strategie. Fail-closed.
-3. **Audit bei jedem Durchlass** — append-only, released *und* blocked, reviewbares Vorher/Nachher.
+1. **Profil-Gate zuerst** — kein Profil → nichts raus (Default-Deny); `egress_enabled=false` → nichts raus, egal welcher Modus.
+2. **Verifier fail-closed** — der deterministische Riegel als Baustein *unter* dem Modus; `strict`/`generalizing`/`pseudonymizing` komponieren ihn, `passthrough` bewusst nicht.
+3. **Audit** — Detailgrad wählt der Betreiber (`off | metadata | full`).
 
-## Strategien
+## Modi (Registry, §3)
 
-- **`GeneralizingStrategy`** (Default) — Einbahnstraße, irreversibel, zustandslos. Die
-  *semantische* Generalisierung macht der Konsument; Sluice verifiziert nur.
-- **`PseudonymizingStrategy`** (explizites Opt-in) — forward + reverse mit
-  Streaming-Holdback, Tool-Arg-Reversal und session-scoped Mapping (TTL, deterministisches
-  Aufräumen).
+Ein Modus ist ein austauschbarer Egress-Handler; Dritte registrieren eigene über
+`register_mode`. Eingebaut:
 
-## Verwendung (Phase 1+2: Library)
+- **`strict`** (Default) — auto-redigierend über die Detektor-Muster, irreversibel, Verifier fail-closed.
+- **`passthrough`** — kein Verifier, keine Transformation; **explizites Opt-in**, der Konsument trägt das Risiko (§2.1).
+- **`generalizing`** — verifiziert nur den vom Konsumenten *bereits* generalisierten Text.
+- **`pseudonymizing`** (Opt-in) — forward + reverse mit Streaming-Holdback, Tool-Arg-Reversal und session-scoped Mapping (TTL, deterministisches Aufräumen).
+
+Fehlt `mode`, gilt der sichere Default `strict` — nie `passthrough` (safe by default).
+
+## Verwendung (Library)
 
 ```python
 from sluice import EgressPayload, Profile, guarded_egress
 
 profile = Profile(
     name="temper",
-    strategy="generalizing",
+    mode="strict",                       # Default; fehlt das Feld, gilt ebenfalls strict
     allowed_purposes=("external_escalation",),
     provider_allowlist=("claude",),
     detector_profile="infra",
@@ -45,10 +52,10 @@ profile = Profile(
 outcome = await guarded_egress(
     profile=profile,
     purpose="external_escalation",
-    payload=EgressPayload(raw_text="…konkret…", generalized_text="…generalisiert…"),
+    payload=EgressPayload(raw_text="Host 10.0.0.5 meldet Druck"),
 )
 if outcome.released:
-    dispatch(outcome.sanitized_text)  # der Konsument schickt selbst ans Gateway
+    dispatch(outcome.sanitized_text)     # z. B. "Host [IP] meldet Druck"
 ```
 
 ## Entwicklung
@@ -60,6 +67,7 @@ uv venv && uv pip install -e '.[dev]'
 
 ## Stand
 
-Phase 1 (Kern) + Phase 2 (Strategien) — testbare Library, noch keine HTTP-Oberfläche.
-Phase 3 (Endpoints `/v1/…` + Client-SDK), Phase 4 (Konsumenten-Migration) und
-Phase 5 (Aufräumen) folgen.
+Kern + Strategien + HTTP-Service (`/v1/…`) stehen. **Rev. 9** macht Sluice zum
+erweiterbaren Modus-Framework (`strict`-Default, `passthrough`, `allowed_modes`,
+konfigurierbares Audit). Offen (§10): Open-Source-Split (generischer Kern öffentlich,
+Homelab-/Konsumenten-Details privat), öffentliches Modus-Plugin-API, Lizenzwahl.

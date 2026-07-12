@@ -10,9 +10,10 @@ Endpunkte:
                                  Audit → Provider-Adapter → (reverse), inkl. SSE-Streaming.
 - `GET  /v1/health`            — Liveness.
 
-Modus (Rev. 4, safety first): Default ist **irreversibel** (generalizing). Reversibel
-(pseudonymizing) ist explizites Opt-in per Profil (`strategy`) oder pro Request
-(`mode: "reversible"`). Unbekannter `mode` ⇒ 400, fail-closed.
+Modus (Rev. 9, safety first): Auslieferungs-Default ist **`strict`** (auto-redigierend,
+Verifier fail-closed). Jeder registrierte Modus-Name (§3) ist per Profil (`mode`) oder pro
+Request (`mode`, inkl. Legacy-Alias `reversible`/`irreversible`) wählbar; ein per Profil
+gesperrter Modus (`allowed_modes`) ⇒ 403, ein unbekannter `mode` ⇒ 400 — beide fail-closed.
 
 Start: `uvicorn sluice.server:app` mit `SLUICE_PROFILES=/pfad/profile.toml`.
 Ohne Profil-Datei startet der Service mit leerer Profil-Menge — Default-Deny (§4.3):
@@ -56,16 +57,15 @@ from sluice.providers import (
     canonical_provider,
     select_egress_adapter,
 )
-from sluice.strategies import EgressPayload, Scope
+from sluice.strategies import EgressPayload, Scope, is_registered_mode
 
 log = structlog.get_logger("sluice.server")
 
-# Request-`mode` (§7.2, Rev. 3) → Strategie-Name. Fail-closed: alles andere ist 400.
-_MODES = {
+# Legacy-Aliase für Request-`mode` (§7.2): Rev. 4 kannte nur reversible/irreversible.
+# Rev. 9: jeder registrierte Modus-Name (§3) ist zulässig; alles andere ist 400 (fail-closed).
+_MODE_ALIASES = {
     "reversible": "pseudonymizing",
     "irreversible": "generalizing",
-    "pseudonymizing": "pseudonymizing",
-    "generalizing": "generalizing",
 }
 
 
@@ -78,15 +78,19 @@ def _blocked(reason: str) -> JSONResponse:
 
 
 def _effective_profile(profile: Profile, mode: str | None) -> Profile | JSONResponse:
-    """Wendet den Request-`mode` an (Rev. 3). Ohne `mode` gilt die Profil-Strategie."""
+    """Wendet den Request-`mode` an (§7.2, Rev. 9). Ohne `mode` gilt der Profil-Modus.
+
+    Ein per Profil gesperrter Modus (`allowed_modes`, §4.1) wird nicht hier, sondern
+    fail-closed im Guard abgewiesen — hier fällt nur ein unbekannter Modus-Name auf (400).
+    """
     if mode is None:
         return profile
-    strategy = _MODES.get(mode)
-    if strategy is None:
-        return _bad_request(f"Unbekannter mode '{mode}' (erlaubt: reversible | irreversible).")
-    if strategy == profile.strategy:
+    resolved = _MODE_ALIASES.get(mode, mode)
+    if not is_registered_mode(resolved):
+        return _bad_request(f"Unbekannter mode '{mode}' (§3).")
+    if resolved == profile.mode:
         return profile
-    return dataclasses.replace(profile, strategy=strategy)
+    return dataclasses.replace(profile, mode=resolved)
 
 
 def _raw_text(messages: list[dict[str, Any]]) -> str:

@@ -55,9 +55,12 @@ def test_parse_spec_schema() -> None:
     assert aider.reversible.storage == "memory"
 
 
-def test_parse_rejects_unknown_strategy() -> None:
-    with pytest.raises(ValueError, match="unbekannte Strategie"):
+def test_parse_rejects_unknown_mode() -> None:
+    # `strategy` bleibt Parse-Alias auf `mode` (Rev. 9); unbekannter Wert ⇒ fail-closed.
+    with pytest.raises(ValueError, match="unbekannter Modus"):
         parse_profiles('[profile."x"]\nstrategy = "cleverhack"\n')
+    with pytest.raises(ValueError, match="unbekannter Modus"):
+        parse_profiles('[profile."x"]\nmode = "cleverhack"\n')
 
 
 def test_parse_rejects_persistent_storage_v1() -> None:
@@ -93,10 +96,21 @@ def test_provider_allowlist() -> None:
     assert not check_provider_allowed(temper, "openai").allowed
 
 
-def test_default_profile_strategy_is_generalizing() -> None:
-    # Rev. 4 (Spec §2, safety first): Default ist irreversibel — pseudonymizing
-    # nur per explizitem Opt-in, nie geerbt.
-    assert Profile(name="neu").strategy == "generalizing"
-    assert parse_profiles('[profile."neu"]\negress_enabled = true\n')["neu"].strategy == (
-        "generalizing"
+def test_parse_allowed_modes() -> None:
+    profiles = parse_profiles(
+        '[profile."locked"]\nmode = "strict"\nallowed_modes = ["strict", "passthrough"]\n'
     )
+    assert profiles["locked"].allowed_modes == ("strict", "passthrough")
+
+
+def test_parse_rejects_unknown_allowed_mode() -> None:
+    with pytest.raises(ValueError, match="allowed_modes"):
+        parse_profiles('[profile."x"]\nallowed_modes = ["nope"]\n')
+
+
+def test_default_mode_is_strict() -> None:
+    # Rev. 9 (Spec §4.3, safety first): fehlt `mode`, gilt der sichere Default `strict`
+    # (auto-redigierend, Verifier fail-closed) — nie `passthrough`, nie geerbt.
+    assert Profile(name="neu").mode == "strict"
+    assert Profile(name="neu").strategy == "strict"  # Lese-Alias
+    assert parse_profiles('[profile."neu"]\negress_enabled = true\n')["neu"].mode == "strict"

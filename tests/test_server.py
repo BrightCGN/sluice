@@ -15,7 +15,7 @@ from sluice.server import create_app
 PROFILES = {
     "aider-code": Profile(
         name="aider-code",
-        strategy="pseudonymizing",  # explizites Opt-in (Rev. 4)
+        mode="pseudonymizing",  # reversibler Modus — explizites Opt-in (§2)
         egress_enabled=True,
         allowed_purposes=("code_completion",),
         provider_allowlist=("claude", "openai"),
@@ -24,7 +24,7 @@ PROFILES = {
     ),
     "temper": Profile(
         name="temper",
-        strategy="generalizing",
+        mode="generalizing",
         egress_enabled=True,
         allowed_purposes=("external_escalation",),
         provider_allowlist=("claude",),
@@ -261,3 +261,40 @@ async def test_guard_endpoint_blocks_identifier_with_200() -> None:
     data = resp.json()
     assert data["released"] is False
     assert "Verifier blockiert" in data["reason"]
+
+
+# ---------- Request-`mode`-Override (§7.2, Rev. 9) ----------
+
+
+async def test_request_mode_passthrough_releases_raw() -> None:
+    # mode=passthrough überschreibt den Profil-Modus: der Rohtext (inkl. E-Mail) geht
+    # unverifiziert an den Adapter — die bewusste Konsumenten-Entscheidung (§2.1).
+    client, adapter = _client()
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={**BODY, "mode": "passthrough"},
+        headers={"X-Sluice-Profile": "temper"},
+    )
+    assert resp.status_code == 200
+    assert adapter.calls, "Adapter muss den (rohen) Text gesehen haben"
+    assert "max@example.com" in adapter.calls[0][0]["content"]
+
+
+async def test_default_generalizing_blocks_same_body() -> None:
+    # Ohne mode-Override bleibt temper generalizing → der Verifier blockt die E-Mail.
+    client, adapter = _client()
+    resp = await client.post(
+        "/v1/chat/completions", json=BODY, headers={"X-Sluice-Profile": "temper"}
+    )
+    assert resp.status_code == 403
+    assert adapter.calls == []
+
+
+async def test_unknown_request_mode_is_400() -> None:
+    client, _ = _client()
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={**BODY, "mode": "cleverhack"},
+        headers={"X-Sluice-Profile": "temper"},
+    )
+    assert resp.status_code == 400

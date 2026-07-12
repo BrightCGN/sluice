@@ -239,6 +239,7 @@ class PseudonymizingStrategy:
 
     reversible = True
     name = "pseudonymizing"
+    enforce_verifier = True  # der Verifier greift auch hier fail-closed (§5, Invariante 2)
 
     def __init__(
         self,

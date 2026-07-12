@@ -12,7 +12,7 @@ from sluice.strategies import EgressPayload, Scope
 
 TEMPER = Profile(
     name="temper",
-    strategy="generalizing",
+    mode="generalizing",
     egress_enabled=True,
     allowed_purposes=("promotion_upload", "external_escalation"),
     provider_allowlist=("claude", "gemini"),
@@ -21,7 +21,7 @@ TEMPER = Profile(
 
 AIDER = Profile(
     name="aider-code",
-    strategy="pseudonymizing",
+    mode="pseudonymizing",
     egress_enabled=True,
     allowed_purposes=("code_completion",),
     provider_allowlist=("claude",),
@@ -31,7 +31,7 @@ AIDER = Profile(
 
 SOVEREIGN = Profile(
     name="sovereign",
-    strategy="generalizing",
+    mode="generalizing",
     egress_enabled=False,
     allowed_purposes=("promotion_upload",),
 )
@@ -151,7 +151,8 @@ async def test_provider_not_in_allowlist_is_blocked() -> None:
 
 
 async def test_audit_written_for_release_and_block() -> None:
-    audit = AuditLog()
+    # `full`-Level: reviewbares Vorher/Nachher wird persistiert (§6, Rev. 9).
+    audit = AuditLog(level="full")
 
     await guarded_egress(
         profile=TEMPER,

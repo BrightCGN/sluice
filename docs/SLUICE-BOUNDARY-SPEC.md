@@ -1,6 +1,23 @@
 # Sluice — Boundary- & Contract-Spec (v1)
 
-> **Stand:** 2026-07-09. **Revision 8:** User-Isolation — jedes Provider-Gateway läuft
+> **Stand:** 2026-07-12. **Revision 9:** Richtungswechsel — Sluice ist ein **erweiterbares
+> Egress-Sanitisierungs-Framework**, kein einzelner *erzwungener* Riegel mehr. **Modi sind eine
+> Registry** (§3): jeder Modus ist ein eigenständiger Egress-Handler hinter *einem* Interface;
+> `passthrough` ist ein First-Class-Modus (§2.1). **Die Modus-Wahl gehört dem Konsumenten**,
+> **das Logging dem Betreiber** (Audit konfigurierbar `off | metadata | full`, §6). Konsequenz:
+> die früheren „drei Invarianten, die nie verändert werden" sind **keine globalen Invarianten
+> mehr** — sie sind jetzt das **Verhalten des `strict`-Modus** und der **sicheren Auslieferungs-
+> Defaults** (§2). `verify_no_identifiers`, die Detektor-Muster und das Audit werden von
+> globalen Zwangs-Schichten zu **wiederverwendbaren Bausteinen**, die ein Modus komponiert
+> (§3.1, §5, §6). **Safe by default:** ausgelieferter Default ist `strict`/deny; `passthrough`
+> und fail-open-Modi sind **explizites Opt-in** — ein unkonfigurierter Konsument leakt nie
+> aus Versehen (§4.3). **Wording:** raus mit „DSGVO-/BSI-konform" — Sluice ist ein *technischer*
+> Egress-Riegel, **kein Zertifikat** (keine Compliance-Zusage, die eine externe Prüfung
+> nachweisen müsste). **Open-Source-Ziel:** generischer Kern öffentlich, konkrete
+> Profile/Detektor-Muster/Deploy-Configs privates Overlay — dieselbe Mechanismus/Domäne-Grenze
+> wie §1.1, jetzt auch als Repo-Grenze (§11, *offen*). Die Revisionen 2–8 bleiben gültig, soweit
+> Rev. 9 sie nicht ausdrücklich umdeutet.
+> **Revision 8:** User-Isolation — jedes Provider-Gateway läuft
 > unter seinem **eigenen System-User** `sluice-gw-<provider>` (systemd `User=sluice-gw-%i`,
 > §7.3); kein Gateway kann Dateien/Keys eines anderen oder des Kerns lesen.
 > **Revision 7:** Gateway-Pflicht — der Kern erreicht Provider
@@ -33,10 +50,16 @@
 
 ## 1. Was Sluice ist — und was nicht
 
-Sluice ist die **eine gemeinsame Sanitisierungs-Boundary**, durch die *jeder* ausgehende
-Datenpfad aller Projekte läuft, bevor er die Kundengrenze überquert. Es ist der Ort, auf den
-bei einer DSGVO-Prüfung gezeigt wird: **eine** Policy, **ein** append-only Audit-Log, **ein**
-deterministischer Riegel.
+Sluice ist ein **erweiterbares Egress-Sanitisierungs-Framework** — eine gemeinsame
+Sanitisierungs-Boundary, durch die ein ausgehender Datenpfad *läuft, wenn der Konsument sie
+wählt*, bevor er die Kundengrenze überquert. Es bündelt an *einem* Ort: **eine** Policy-Form
+(Profil), **ein** (konfigurierbares) Audit-Log, **eine** Registry austauschbarer
+Sanitisierungs-Modi über *einem* Interface.
+
+Sluice ist ein **technischer** Egress-Riegel, **kein Compliance-Zertifikat** (Rev. 9): es trägt
+bewusst *keine* „DSGVO-/BSI-konform"-Zusage, die eine externe Prüfung nachweisen müsste. Was es
+liefert, ist ein nachvollziehbarer, wiederverwendbarer *Mechanismus* — welche rechtliche Aussage
+ein Betreiber daraus ableitet, ist dessen Sache, nicht Sluices Versprechen.
 
 Sluice ist ein **eigenständig deploybarer Dienst** mit eigenem Repo und eigenem
 Lebenszyklus (Security-Takt), **kein** in Temper/PrismClaw eingebettetes Modul. Konsumenten
@@ -52,13 +75,15 @@ Konsument (im Perimeter)
 ┌──────────────────────────────────────────────┐
 │  SLUICE  (Sanitisierungs-Boundary, Perimeter)│
 │   • Profil-Gate      (§4)                     │
-│   • Strategie        (§3  generalize|pseudon.)│
-│   • Verifier         (§5  harter Riegel)      │
-│   • Audit            (§6  egress_log)          │
-│   • Provider-Adapter (§7.3, nach dem Riegel)  │
-│      ▲ reverse (nur pseudonymisierender Modus)│
+│   • Modus (Registry) (§3  strict|passthrough│ │
+│                          |pseudon.|…)         │
+│   • Verifier         (§5  Baustein; strict:   │
+│                          harter Riegel)       │
+│   • Audit            (§6  off|metadata|full)  │
+│   • Provider-Adapter (§7.3, nach dem Modus)   │
+│      ▲ reverse (nur reversibler Modus)        │
 └──────┬────────────┬────────────┬─────────────┘
-       │ nur sanitisierter Text (Invariante 2)
+       │ Text gemäß gewähltem Modus (strict: sanitisiert; passthrough: unverändert)
    ┌───▼───┐   ┌────▼────┐   ┌───▼────┐   ┌────────┐
    │Claude │   │ OpenAI  │   │ Gemini │   │Mistral │  …
    └───────┘   └─────────┘   └────────┘   └────────┘
@@ -78,17 +103,19 @@ festgehalten: Sluice trägt jetzt Provider-API-Keys und Erreichbarkeits-Verantwo
 
 | Zuständigkeit | Sluice (Mechanismus, einmal gebaut) | Konsument (Policy/Domäne, pro Projekt) |
 |---|---|---|
-| Profil-Gate, Verifier-Engine, Audit, Diff-Mechanik | ✅ | — |
-| Strategie-Auswahl ausführen | ✅ | — (wählt nur via Profil) |
+| Profil-Gate, Verifier-Engine, Audit, Diff-Mechanik, **Modus-Registry** | ✅ | — |
+| Modus-Auswahl ausführen (inkl. eigener Dritt-Modi) | ✅ Engine | — (wählt via Profil/Request; kann eigenen Modus registrieren) |
 | **Semantische Generalisierung** (validierter Fix → übertragbare Lektion) | — | ✅ Temper-Businesslogik |
 | Detektor-**Muster** (welche Identifier für diese Domäne) | Engine ✅ / Muster als Profil | ✅ deklariert Profil |
 | Provider-**Kommunikation** (Adapter Claude/OpenAI/Gemini/Mistral) | ✅ (§7.3, Revision 2) | — (wählt Provider via Allowlist §4.1) |
 | Upstream-Provider-API-Keys | ✅ per Env, nie im Profil/Audit (§7.3) | — |
 | Failover/Health/Tenant-Order | *(post-v1)* | — |
 
-**Kernregel:** Sluice garantiert *„kein Identifier überquert die Grenze" + Audit* — projekt­unabhängig.
-Die *semantische* Generalisierung bleibt beim Konsumenten. Zieht man Domänenlogik nach Sluice,
-muss es jede Konsumenten-Semantik kennen — und man baut es doch wieder jedes Mal neu.
+**Kernregel:** Sluice liefert den projektunabhängigen *Mechanismus* — Profil-Gate, Modus-Registry,
+Verifier-Engine, Audit. Die *Zusage* „kein Identifier überquert die Grenze" gilt für den
+`strict`-Modus (Default); wählt ein Konsument bewusst einen schwächeren Modus, trägt er das Risiko
+(§2.1). Die *semantische* Generalisierung bleibt beim Konsumenten. Zieht man Domänenlogik nach
+Sluice, muss es jede Konsumenten-Semantik kennen — und man baut es doch wieder jedes Mal neu.
 
 ---
 
@@ -100,14 +127,15 @@ funktionsgetriebene Gegensätze** — beide berechtigt:
 | | **Generalizing** (aus Temper) | **Pseudonymizing** (aus PrismClaw) |
 |---|---|---|
 | Richtung | Einbahnstraße (forward) | Kreis (forward + reverse) |
-| DSGVO | irreversibel → aus Scope | Mapping-Tabelle → bleibt personenbezogen |
+| Personenbezug | irreversibel → aus Scope | Mapping-Tabelle → bleibt personenbezogen |
 | Rückweg | keiner | vollständig (Stream-Reverser, Tool-Arg-Reversal) |
 | Zustand | zustandslos | session-scoped Mapping-Tabelle (TTL, Scope) |
 | Antwort ist | Ratschlag, lokal angewandt (Konfidenz gedeckelt) | direkt nutzbar (echte Werte zurück) |
 | Primärer Fall | Temper, Crate, Bank-Tool | Aider / Code-Dogfooding |
 | Integrationsform (§7) | konsument-vermittelt (Guard-Call) | proxy-vermittelt (transparenter Endpoint) |
 
-Der **Schalter** wählt eine *Strategie-Implementierung*, kein `if reversible:` im Guard:
+Diese zwei Referenz-Implementierungen sind seit Rev. 9 **zwei Modi in der Registry** (§3) — der
+**Schalter** wählt eine *Modus-Implementierung* aus der Registry, kein `if reversible:` im Guard:
 
 ```
 SanitizationStrategy (Interface)
@@ -116,33 +144,81 @@ SanitizationStrategy (Interface)
                                + tool_arg_reversal + Mapping-Lebenszyklus
 ```
 
-**Drei Invarianten, die der Schalter NIE verändert** (er tauscht nur das Strategie-Objekt):
+**Früher „drei Invarianten" — jetzt das Verhalten des `strict`-Modus (Rev. 9).** Bis Rev. 8
+galten drei Regeln als global und unabänderlich. Mit der Modus-Registry (§3) sind sie **keine
+globalen Invarianten mehr**, sondern die **definierenden Eigenschaften des `strict`-Modus** und
+der **sicheren Auslieferungs-Defaults**. Der `strict`-Modus (und alles, was auf ihm aufbaut)
+garantiert weiterhin genau dies — deshalb ist er der Default (§4.3):
 
-1. **Profil-Gate** (§4) läuft immer zuerst.
-2. **Verifier** (§5) läuft in *beiden* Modi **gleich streng** — er ist die Schicht *unter*
-   der Strategie, nicht Teil von ihr. „Reversibel" ist **kein** Grund, den Riegel zu lockern:
-   auch dann darf nur ein *Pseudonym* raus, nie ein echter Wert, den das Mapping übersah.
-3. **Audit** (§6) protokolliert jeden Durchlass append-only, reviewbares Vorher/Nachher.
+1. **Profil-Gate** (§4) läuft zuerst.
+2. **Verifier** (§5) läuft **fail-closed** — findet er *irgendeinen* rohen Identifier →
+   blockiert. Als *Baustein* (§3.1) frei komponierbar; im `strict`-Modus ist er der harte Boden,
+   auch im reversiblen Fall („reversibel" lockert ihn *innerhalb* dieses Modus nie: nur ein
+   *Pseudonym* raus, nie ein echter Wert, den das Mapping übersah).
+3. **Audit** (§6) protokolliert den Durchlass — im `strict`-Modus append-only mit reviewbarem
+   Vorher/Nachher. Der *Betreiber* kann den Detailgrad global senken (`off | metadata | full`),
+   ohne den Sanitisierungs-Modus zu verändern.
 
-**Default & Opt-in (Revision 4, safety first):** `GeneralizingStrategy` (irreversibel) ist
-der **Default** — die stärkere DSGVO-Zusage: es entsteht keine personenbezogene
-Mapping-Tabelle, nichts ist rückrechenbar. `PseudonymizingStrategy` ist die **explizite
-Opt-in-Ausnahme**, wählbar per Profil (`strategy = "pseudonymizing"`) oder per Request
-(`mode: "reversible"`, §7.2) — nie durch Vererbung, nur durch bewusste Deklaration.
-(Historie: Revision 3 hatte den Default kurzzeitig umgekehrt; Revision 4 nimmt das zurück.)
-Unverändert in beiden Modi: Verifier gleich streng (Invariante 2), Profil-Gate/Default-Deny
-(§4.3), v1-Mapping-Storage nur `memory` mit TTL/Scope-Aufräumen (§8).
+**Was ein anderer Modus tun darf.** `passthrough` (§2.1) lässt den Verifier *aus* und
+transformiert nicht; ein `basic`/regex-Modus darf eine kleinere Erkennungsfläche haben; ein
+Dritt-Modus darf fail-open sein. Das ist erlaubt, weil es **explizit gewählt** wird — nicht
+still geerbt (§4.3). Die frühere Zusage „*jeder* Egress läuft durch den Riegel" wird damit zu
+„*der `strict`-Default* läuft durch den Riegel, und Abweichung ist eine bewusste, im Profil/
+Request sichtbare Konsumenten-Entscheidung".
+
+**Default & Opt-in (Rev. 9, safety first):** Der **ausgelieferte Default-Modus ist `strict`**
+(irreversibel, Verifier fail-closed) — die stärkste Zusage: keine personenbezogene
+Mapping-Tabelle, nichts rückrechenbar, kein roher Identifier durch. Alle **schwächeren Modi
+sind explizites Opt-in** — `passthrough` (§2.1), ein regex-`basic`-Modus, der reversible
+`pseudonymizing`-Modus (wählbar per Profil `mode = "pseudonymizing"` oder per Request
+`mode: "reversible"`, §7.2) — **nie durch Vererbung, nur durch bewusste Deklaration** (§4.3).
+Die Reversibilität ist eine *Eigenschaft des jeweiligen Modus* (`reversible: bool`, §3), keine
+eigene globale Achse mehr. (Historie: Rev. 3 kehrte den Default kurz um, Rev. 4 nahm das zurück,
+Rev. 9 verallgemeinert „Strategie" zu „Modus".) Für den reversiblen Modus gilt unverändert:
+Verifier komponiert fail-closed, v1-Mapping-Storage nur `memory` mit TTL/Scope-Aufräumen (§8).
+
+### 2.1 `passthrough` — der triviale Modus (Rev. 9)
+
+`passthrough` ist ein **First-Class-Modus**, kein Bypass an der Boundary vorbei: der Payload
+läuft durch dieselbe Kette (Profil-Gate → Modus → Audit), aber der `passthrough`-Modus
+**transformiert nicht und komponiert den Verifier nicht** — er reicht den Text unverändert an
+den Dispatch. Anwendungsfälle: bereits nicht-sensible Daten, lokale/vertrauenswürdige Ziele,
+und ausdrücklich **Experimentieren** (eigener Modus in Entwicklung, A/B gegen einen echten
+Sanitisierungs-Modus).
+
+Regeln, die auch für `passthrough` gelten:
+- **Explizites Opt-in.** Nur erreichbar, wenn das Profil ihn erlaubt bzw. der Request ihn setzt
+  — nie der ausgelieferte Default, nie geerbt (§4.3). Ein unkonfigurierter Konsument bekommt
+  `passthrough` **nie** aus Versehen.
+- **Profil-Gate läuft trotzdem zuerst.** `egress_enabled = false` (souverän) blockiert auch
+  `passthrough` — das Gate liegt *vor* der Modus-Auswahl (§4.2).
+- **Audit nach Betreiber-Config** (§6): `metadata` protokolliert *dass* ein `passthrough`-Durchlass
+  geschah (Profil/Zeit/Modus/Provider) ohne Vorher/Nachher; `off` schaltet auch das ab; `full`
+  loggt den Text. Der Betreiber wählt — nicht der Modus.
+
+**Verantwortung wandert zum Konsumenten.** Wer `passthrough` wählt, trägt das Egress-Risiko
+selbst; Sluice sagt dann nur noch „das Profil erlaubt es und (je nach Config) hier ist der
+Log-Eintrag" zu — nicht mehr „kein roher Identifier ging raus". Das ist die bewusste
+Framework-Zusage aus Rev. 9.
 
 ---
 
-## 3. Das Strategie-Interface (Mechanismus-Kern)
+## 3. Das Modus-Interface (Mechanismus-Kern)
+
+Ein **Modus** ist die Registry-Einheit: ein eigenständiger Egress-Handler hinter *einem*
+Interface, adressiert über seinen `name`. Sluice liefert eine Reihe eingebauter Modi; **Dritte
+registrieren eigene** (das ist der Open-Source-Erweiterungspunkt, Rev. 9). Jeder Modus deklariert
+seine eigenen Eigenschaften — insbesondere `reversible` — statt dass eine globale Achse sie
+vorgibt.
 
 ```python
-class SanitizationStrategy(Protocol):
-    reversible: bool
+class Mode(Protocol):                       # vormals SanitizationStrategy (Rev. 9 umbenannt)
+    name: str                               # Registry-Schlüssel, z. B. "strict", "passthrough"
+    reversible: bool                        # Eigenschaft DES Modus, keine globale Achse mehr
 
     async def forward(self, payload: EgressPayload, scope: Scope | None) -> Sanitized:
-        """Roh → sanitisiert (generalisiert ODER pseudonymisiert). Egress-Kandidat."""
+        """Roh → egress-fertig. Der Modus entscheidet, OB er den Verifier (§5) komponiert.
+        passthrough: Identität, kein Verifier. strict/full: transformiert + Verifier fail-closed."""
 
     async def reverse_text(self, text: str, scope: Scope) -> str:
         """Sanitisiert → roh. NUR reversible=True. Sonst NotImplementedError."""
@@ -154,17 +230,34 @@ class SanitizationStrategy(Protocol):
         """Tool-Call-Argumente zurückmappen. NUR reversible=True."""
 ```
 
-- **`GeneralizingStrategy`**: `reversible=False`. `forward()` verifiziert nur, dass der vom
-  Konsumenten gelieferte *generalisierte* Text egress-tauglich ist (die eigentliche
-  Generalisierung macht der Konsument, §1.1). Reverse-Methoden werfen `NotImplementedError`.
-  Herkunft: Tempers Datenfluss (`guard.py` ruft nur `verify_no_identifiers`).
-- **`PseudonymizingStrategy`**: `reversible=True`. Volle Implementierung aller vier Methoden.
-  Herkunft: PrismClaws `anon` (`forward_messages`, `reverse_text`, `stream_reverser` mit
-  Holdback, `reverse_obj` für Tool-Args). Trägt den Mapping-Lebenszyklus (§8).
+**Verifier/Detektoren/Audit sind Bausteine (§3.1), kein Zwang.** Ob ein Modus den Verifier
+komponiert, ist Sache des Modus. Die *eingebauten* Sanitisierungs-Modi komponieren ihn
+**fail-closed**, damit sie out-of-the-box vertrauenswürdig sind; `passthrough` tut es nicht; ein
+Fremd-Modus ist frei. Guard-Orchestrierung (Profil-Gate zuerst, Audit-Aufruf) und Dispatch
+bleiben **außerhalb** des Modus und für alle Modi gleich.
 
-Ein späteres drittes Verfahren (z. B. **format-preserving** fürs Bank-Tool: Beträge/IBANs
-strukturerhaltend maskieren) ist einfach eine dritte `SanitizationStrategy` hinter demselben
-Schalter — **ohne** Guard, Verifier oder Audit anzufassen. *(post-v1)*
+**Eingebaute Modi (initiale Menge, erweiterbar):**
+- **`strict`** — `reversible=False`, **Auslieferungs-Default (§4.3)**. **Auto-redigierend:**
+  `forward()` fährt selbst die Detektor-Engine (§5.1) über den *Rohtext*, ersetzt jeden Treffer
+  durch einen typisierten Platzhalter (`[IP]`, `[EMAIL]`, `[SECRET]`, …) und komponiert danach
+  den Verifier **fail-closed** — bleibt ein roher Identifier stehen, wird **blockiert** (kein
+  Durchlass mit Rest-Leck). Anders als `generalizing` verlangt `strict` *keinen* vom Konsumenten
+  vor-generalisierten Text; er sanitisiert eigenständig. Irreversibel (kein Mapping). Der Modus,
+  der die früheren „Invarianten"-Eigenschaften trägt.
+- **`passthrough`** — `reversible=False`, kein Verifier, keine Transformation (§2.1). Opt-in.
+- **`generalizing`** — `reversible=False`. `forward()` verifiziert nur, dass der vom Konsumenten
+  *bereits generalisierte* Text egress-tauglich ist (die semantische Generalisierung macht der
+  Konsument, §1.1). Herkunft: Tempers `guard.py` (ruft nur `verify_no_identifiers`).
+- **`pseudonymizing`** — `reversible=True`. Volle Implementierung aller vier Methoden; trägt den
+  Mapping-Lebenszyklus (§8). Herkunft: PrismClaws `anon` (`forward_messages`, `reverse_text`,
+  `stream_reverser` mit Holdback, `reverse_obj`).
+- *(erweiterbar)* ein regex-`basic` / regex+NER-`full`-Abstufung sowie **format-preserving**
+  (Beträge/IBANs strukturerhaltend) sind je ein weiterer registrierter Modus — **ohne** Guard,
+  Profil-Gate oder Audit anzufassen. *(post-v1)*
+
+Modus-Namen benennen **Absicht/Zusage**, nicht die Engine: nicht `pii_regex`/`pii_ner` (das
+verdrahtet die Implementierung in den Vertrag und bricht beim Engine-Tausch, §5.1/§7.4), sondern
+Abstufungen wie `basic`/`full`/`strict`. Regex-vs-NER bleibt austauschbare Engine dahinter.
 
 ---
 
@@ -175,14 +268,14 @@ seiner Egress-Erlaubnis.
 
 ```toml
 [profile."temper"]
-strategy            = "generalizing"          # = Default (Rev. 4); Angabe optional
+mode                = "generalizing"          # Modus-Name aus der Registry (§3)
 egress_enabled      = true                    # false = souverän/air-gapped: NICHTS raus (§4.2)
 allowed_purposes    = ["external_escalation", "promotion_upload"]
 provider_allowlist  = ["claude", "gemini"]    # welche Provider dieses Profil überhaupt darf (§4.1)
 detector_profile    = "infra"                 # welches Detektor-Set der Verifier lädt (§5.1)
 
 [profile."aider-code"]
-strategy            = "pseudonymizing"        # explizites Opt-in (Rev. 4)
+mode                = "pseudonymizing"        # reversibler Modus — explizites Opt-in (§2)
 egress_enabled      = true
 allowed_purposes    = ["code_completion"]
 provider_allowlist  = ["claude"]
@@ -193,31 +286,44 @@ detector_profile    = "code"
   storage           = "memory"                # memory | persistent(post-v1)
 
 [profile."crate"]
-strategy            = "generalizing"
+mode                = "generalizing"
 egress_enabled      = true
 allowed_purposes    = ["playlist_curation"]
 provider_allowlist  = ["claude", "gemini", "openai"]
 detector_profile    = "media"
 
 [profile."bank-tool"]                         # strengstes Profil (§4.4)
-strategy            = "generalizing"
+mode                = "strict"                 # kein consumer-generalisierter Text: harter Modus
 egress_enabled      = true
 allowed_purposes    = ["strategy_reasoning"]
 provider_allowlist  = ["claude-zdr"]          # nur Zero-Retention / lokal
 detector_profile    = "financial"
 ```
 
-### 4.1 Provider-Allowlist pro Profil
-Weil Modell-Adapter generisch sind (§7.3), unterscheidet sich die *Erlaubnis* pro Profil —
-Provider divergieren in Retention/Training. Bank-Profil ⇒ nur ZDR/lokal; Crate darf großzügiger.
+### 4.1 Allowlists pro Profil (Provider und Modus)
+Weil Modell-Adapter generisch sind (§7.3), unterscheidet sich die *Provider*-Erlaubnis pro Profil
+— Provider divergieren in Retention/Training. Bank-Profil ⇒ nur ZDR/lokal; Crate darf großzügiger.
+
+**Modus-Allowlist (`allowed_modes`, optional, Rev. 9).** Analog begrenzt ein Profil, welche
+Registry-Modi (§3) ein Request wählen darf. **Default: alle registrierten Modi erlaubt** — maximale
+Freiheit für Konsumenten/Experimente (Rev. 9). Ein sicherheitsbewusster Betreiber sperrt schwache
+Modi gezielt: `allowed_modes = ["strict"]` verbietet z. B. `passthrough` für dieses Profil, auch
+wenn ein Request ihn anfragt (⇒ 403, fail-closed). Wichtig: der *laufende Default* bleibt in jedem
+Fall `strict` (§4.3) — die Allowlist erweitert/beschränkt nur die *wählbaren* Modi, sie ändert nie,
+was ohne explizite Wahl passiert.
 
 ### 4.2 `egress_enabled = false` = souveränes Profil
 Maschinenlesbare Form von Prinzip 16 (Tempers `policy.py`). Guard lässt **nichts** durch,
 egal welche Strategie — der Riegel greift *vor* der Strategie-Auswahl.
 
-### 4.3 Default-Deny
+### 4.3 Default-Deny & sicherer Default-Modus
 Ein Konsument **ohne** Profil bekommt **nichts** raus. Kein Vererben fremder Profile.
 Neue Projekte erben nie versehentlich Crates lockere Policy.
+
+**Sicherer Default-Modus (Rev. 9):** Lässt ein Profil das `mode`-Feld weg, gilt **`strict`** —
+nicht `passthrough`. Die schwachen Modi (`passthrough`, fail-open) sind **nur** wirksam, wenn das
+Profil sie ausdrücklich nennt bzw. der Request sie setzt (§7.2). *Safe by default:* ein Vertippen
+oder ein kopiertes Skelett-Profil öffnet nie versehentlich die Boundary; „offen" muss dastehen.
 
 ### 4.4 Mandanten-Isolation
 Geteilter Code, aber getrennte Policies, Audit-Streams, Credentials und Budgets **pro Profil**.
@@ -227,9 +333,14 @@ Ein Bug/eine schlampige Regel in `crate` darf niemals `temper`- oder `bank-tool`
 
 ## 5. Der Verifier (universeller, deterministischer Backstop)
 
-Herkunft: Tempers `verifier.py`. **Läuft in beiden Modi, gleich streng.** Fail-closed:
-findet er *irgendeinen* rohen Identifier → **blockiert** (`clean=False`). Lieber false-positive
-als ein Leck. Er ist der harte Riegel *unter* der probabilistischen Strategie.
+Herkunft: Tempers `verifier.py`. **Ein wiederverwendbarer Baustein (Rev. 9), kein globaler
+Zwang mehr.** Verhalten unverändert, wo er läuft: fail-closed — findet er *irgendeinen* rohen
+Identifier → **blockiert** (`clean=False`). Lieber false-positive als ein Leck. Die *eingebauten*
+Sanitisierungs-Modi (`strict`, `full`, `pseudonymizing`) **komponieren ihn fail-closed** als
+harten Boden *unter* der probabilistischen Transformation — er bleibt dort der Riegel, den
+„reversibel" nie lockert. `passthrough` komponiert ihn *nicht*; ein Fremd-Modus ist frei. Ein
+Modus, der ihn weglässt, gibt damit dessen Zusage bewusst auf — das ist die Konsumenten-
+Entscheidung aus Rev. 9, nicht Sluices Standard (der ist `strict`, §4.3).
 
 **Wichtig für die Konsolidierung:** PrismClaws Pfad pseudonymisiert heute, hat aber **kein
 unabhängiges** „ist wirklich kein roher Identifier durchgerutscht?"-Gate vor dem Absenden.
@@ -258,12 +369,22 @@ Umgebungen zu stammen?". Justierbar pro Profil (bank-tool strenger als temper).
 
 ## 6. Audit (`egress_log`, append-only)
 
-Genau *ein* Log, das der Guard bei **jedem** Durchlass schreibt — released *und* blocked.
-Löst Tempers heutiges `TODO(post-v1)` in `guard.py::_log_egress` in Sluice ein.
+*Ein* Log, das der Guard beim Durchlass schreibt — released *und* blocked. Löst Tempers
+heutiges `TODO(post-v1)` in `guard.py::_log_egress` in Sluice ein.
 
-Pro Eintrag: `timestamp, profile, purpose, strategy, released(bool), reason, before(raw),
-after(sanitized), provider_target, verifier_findings[]`. Das **reviewbare Vorher/Nachher** ist
-die Fläche fürs Admin-Gate und der DSGVO-/Audit-Nachweis. Append-only (Prinzip 13).
+**Detailgrad konfiguriert der Betreiber (Rev. 9), nicht der Modus** — global per
+`SLUICE_AUDIT_LEVEL`:
+- **`full`** — voller Eintrag inkl. reviewbarem Vorher/Nachher (`before`/`after`). Die Fläche
+  fürs Admin-Gate und der stärkste operative Nachweis.
+- **`metadata`** (Default) — Eintrag *ohne* `before`/`after`: `timestamp, profile, purpose, mode,
+  released(bool), reason, provider_target, verifier_findings[]`. Man sieht *dass* etwas durchging
+  und in welchem Modus, ohne die Nutzdaten zu persistieren.
+- **`off`** — kein Log. Bewusste Betreiber-Entscheidung; Sluice sagt dann nichts über Durchläufe
+  zu.
+
+Wo geschrieben wird, ist der Sink **append-only** (Prinzip 13). Der Detailgrad ist eine
+*Betriebs*-Einstellung und **verändert den Sanitisierungs-Modus nicht** — `strict` bleibt
+`strict`, auch wenn der Betreiber `off` fährt.
 
 ---
 
@@ -301,9 +422,13 @@ POST /v1/chat/completions
   Body:   { "messages":[…echte Daten…], "model":"…", "provider":"…", "stream":true,
             "mode":"reversible" }
 
-`mode` (optional): "irreversible" (Default, Rev. 4) | "reversible" (explizites Opt-in) —
-überschreibt die Profil-Strategie für diesen Request. `provider` (optional): default ist der
-erste Eintrag der Profil-Allowlist; jede Wahl wird gegen die Allowlist geprüft (§4.1).
+`mode` (optional): ein **Modus-Name aus der Registry** (§3) — `strict` | `passthrough` |
+`pseudonymizing` | … — überschreibt den Profil-Modus für diesen Request (Rev. 9; die alten Werte
+`"irreversible"`/`"reversible"` bleiben als Alias auf `strict`/`pseudonymizing` gültig). Fehlt er,
+gilt der Profil-Modus, sonst `strict` (§4.3). Der gewählte Modus wird gegen die optionale
+`allowed_modes`-Allowlist des Profils geprüft (§4.1); eine nicht erlaubte Wahl ⇒ fail-closed
+(403). `provider` (optional): default ist der erste Eintrag der Provider-Allowlist; jede Wahl
+wird gegen sie geprüft (§4.1).
 
 Sluice-intern:  forward(scope) → verify → Provider-Adapter (§7.3) → stream_reverser(scope) → Tool-Args reverse
 → SSE zurück an den Konsumenten in **echten Werten**.
@@ -322,8 +447,11 @@ Die Allowlist (§4.1) begrenzt pro Profil, welche erlaubt sind.
 
 - **v1-Adapter:** `anthropic` (Claude), `openai`, `gemini`, `mistral`. OpenAI und Mistral
   teilen den Chat-Completions-Dialekt (gemeinsame Basis-Klasse).
-- **Reihenfolge zwingend:** Der Adapter wird ausschließlich vom Dispatch aufgerufen,
-  *nachdem* `guarded_egress` released hat — nie mit unverifiziertem Text (Invariante 2).
+- **Reihenfolge zwingend:** Der Adapter wird ausschließlich vom Dispatch aufgerufen, *nachdem*
+  der gewählte Modus gelaufen ist und der Guard released hat — der Adapter ist die *letzte*
+  Schicht der Kette, **nie ein Bypass** daran vorbei (§2). Bei sanitisierenden Modi heißt das
+  „nie mit unverifiziertem Text"; bei `passthrough` reicht der Modus den Text bewusst
+  unverändert durch — die Reihenfolge (Gate → Modus → Dispatch) gilt trotzdem.
 - **API-Keys:** per Env-Variable (`SLUICE_ANTHROPIC_API_KEY`, `SLUICE_OPENAI_API_KEY`,
   `SLUICE_GEMINI_API_KEY`, `SLUICE_MISTRAL_API_KEY`) — seit Revision 7 **nur in der Env
   des jeweiligen Gateway-Prozesses**, nie beim Kern. Nie im Profil-TOML, nie im Audit-Log.
@@ -441,12 +569,21 @@ ihnen operieren.
 - **mTLS Konsument ↔ Sluice** als Härtung (heute VLAN-firewalled) — *(post-v1)*.
 - **Bank-Tool-Lesezugriff** (FinTS/HBCI/Aggregator) ist eine *separate* Sicherheitsfläche,
   **nicht** Teil von Sluice — nur der Vollständigkeit halber genannt.
+- **Open-Source-Split (Rev. 9)** — *(offen)*, eigene Phase: generischer Kern (Modus-Registry,
+  Verifier-Engine, Audit, Server, Gateway) öffentlich; konkrete Profile, Detektor-Muster echter
+  Konsumenten und Deploy-Configs mit Homelab-Details (IPs, `sluice.env`, Konsumentennamen) als
+  **privates Overlay**. Vor jeder Veröffentlichung: Scrub gegen private Details. Es ist dieselbe
+  Mechanismus/Domäne-Grenze wie §1.1, jetzt als Repo-Grenze.
+- **Öffentliches Modus-Plugin-API (Rev. 9)** — sobald Dritte eigene Modi registrieren, wird das
+  `Mode`-Interface (§3) ein **öffentlicher Vertrag** und fällt unter die Versionszusage §7.4.
+  Registrierungs-Mechanik (Entry-Points vs. explizite Registry) — *(offen)*.
+- **Lizenzwahl** für den Open-Source-Kern — *(offen)*.
 
 ---
 
 ## Anhang A — Landschaft nach der Konsolidierung
 
-| Projekt | Rolle ggü. Sluice | Strategie | Integrationsform |
+| Projekt | Rolle ggü. Sluice | Modus (§3) | Integrationsform |
 |---|---|---|---|
 | **Sluice** | *ist* die Boundary | — | — |
 | **PrismClaw** | Konsument (verliert eingebackene `anon`; Gateway-Rolle entfällt mit Revision 2, §7.3) | — / pseudonymizing | Proxy (§7.2) |

@@ -14,7 +14,7 @@ from sluice.strategies.pseudonymizing import PseudonymizingStrategy
 
 TEMPER = Profile(
     name="temper",
-    strategy="generalizing",
+    mode="generalizing",
     egress_enabled=True,
     allowed_purposes=("external_escalation",),
     provider_allowlist=("claude", "gemini"),
@@ -23,7 +23,7 @@ TEMPER = Profile(
 
 AIDER = Profile(
     name="aider-code",
-    strategy="pseudonymizing",
+    mode="pseudonymizing",
     egress_enabled=True,
     allowed_purposes=("code_completion",),
     provider_allowlist=("claude",),

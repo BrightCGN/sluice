@@ -54,3 +54,30 @@ def verify_no_identifiers(text: str, detector_profile: str | DetectorProfile = "
             findings.append(deny.finding)
 
     return VerificationResult(clean=not findings, findings=findings)
+
+
+def redact_identifiers(text: str, detector_profile: str | DetectorProfile = "infra") -> str:
+    """Auto-Redaktion für den `strict`-Modus (Spec §3): ersetzt jeden Muster-Treffer des
+    Detektor-Profils durch seinen typisierten Platzhalter (`[IP]`, `[EMAIL]`, …).
+
+    Reine Mechanik über die *deklarierten* Muster (§1.1) — keine Domänen-Semantik. Bei
+    unbekanntem Profil wird der Text **unverändert** zurückgegeben; der Verifier greift
+    dann im Guard fail-closed (kein stiller Durchlass). Danach fährt der Guard
+    `verify_no_identifiers` als Boden — bleibt ein roher Identifier stehen, wird blockiert.
+    """
+    if isinstance(detector_profile, str):
+        profile = get_detector_profile(detector_profile)
+        if profile is None:
+            return text  # unbekannt → nicht redigieren; Guard-Verifier blockt fail-closed
+    else:
+        profile = detector_profile
+
+    for deny in profile.deny:
+        if deny.validate is not None:
+            text = deny.pattern.sub(
+                lambda m, d=deny: d.placeholder if d.validate(m.group(0)) else m.group(0),
+                text,
+            )
+        else:
+            text = deny.pattern.sub(deny.placeholder, text)
+    return text

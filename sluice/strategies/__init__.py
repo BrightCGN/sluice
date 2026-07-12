@@ -15,6 +15,7 @@ Ein späteres drittes Verfahren (format-preserving, post-v1) ist einfach eine we
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -68,14 +69,23 @@ class StreamReverserProtocol(Protocol):
 
 
 @runtime_checkable
-class SanitizationStrategy(Protocol):
-    """Das Strategie-Interface (Spec §3) — der Mechanismus-Kern des Schalters."""
+class Mode(Protocol):
+    """Das Modus-Interface (Spec §3) — die Registry-Einheit des Schalters (Rev. 9).
+
+    Ein Modus deklariert seine Eigenschaften selbst:
+    - `reversible`: trägt einen Mapping-Rückweg (nur PseudonymizingStrategy).
+    - `enforce_verifier`: ob der Guard den deterministischen Riegel (§5) *unter* diesem
+      Modus fail-closed komponiert. `True` für die Sanitisierungs-Modi (`strict`,
+      `generalizing`, `pseudonymizing`), `False` für `passthrough` (§2.1). Der Modus
+      entscheidet damit, ob der Verifier greift — der Guard erzwingt ihn nicht global.
+    """
 
     reversible: bool
     name: str
+    enforce_verifier: bool
 
     async def forward(self, payload: EgressPayload, scope: Scope | None) -> Sanitized:
-        """Roh → sanitisiert (generalisiert ODER pseudonymisiert). Egress-Kandidat."""
+        """Roh → Egress-Kandidat (redigiert/generalisiert/pseudonymisiert/unverändert)."""
         ...
 
     async def reverse_text(self, text: str, scope: Scope) -> str:
@@ -91,45 +101,97 @@ class SanitizationStrategy(Protocol):
         ...
 
 
-# ---- Auswahl über das Profil (Spec §2: der Schalter) ---------------------------------
-
-# Pseudonymisierende Strategien tragen Zustand (Mapping-Lebenszyklus §8) und werden
-# deshalb pro Profil gecacht, damit Scopes über mehrere Guard-Aufrufe stabil bleiben.
-_instances: dict[str, SanitizationStrategy] = {}
+# Rückwärtskompatibler Alias (Rev. 9: „Strategie" → „Modus").
+SanitizationStrategy = Mode
 
 
-def select_strategy(profile: Profile) -> SanitizationStrategy:
-    """Zieht aus `profile.strategy` die Implementierung (Spec §3)."""
+# ---- Modus-Registry (Spec §3, Rev. 9) ------------------------------------------------
+#
+# Der Erweiterungspunkt: Dritte registrieren eigene Modi über `register_mode`. Eine
+# Factory bekommt das Profil und baut die Modus-Instanz (z. B. mit `detector_profile`
+# oder Mapping-TTL). Eingebaute Modi werden lazy registriert, damit die Modul-Importe
+# der Modus-Klassen (die aus diesem Paket importieren) keinen Zyklus bilden.
+
+ModeFactory = Callable[["Profile"], Mode]
+
+_MODE_FACTORIES: dict[str, ModeFactory] = {}
+_builtins_loaded = False
+
+# Modi mit Zustand (Mapping-Lebenszyklus §8) müssen pro Profil stabil bleiben; wir
+# cachen alle Instanzen pro (Profil, Modus), damit Scopes über Guard-Aufrufe halten.
+_instances: dict[str, Mode] = {}
+
+
+def register_mode(name: str, factory: ModeFactory) -> None:
+    """Registriert einen Modus unter `name` (öffentlicher Erweiterungspunkt, §3)."""
+    _MODE_FACTORIES[name] = factory
+
+
+def _ensure_builtins() -> None:
+    global _builtins_loaded
+    if _builtins_loaded:
+        return
     from sluice.strategies.generalizing import GeneralizingStrategy
+    from sluice.strategies.passthrough import PassthroughStrategy
     from sluice.strategies.pseudonymizing import PseudonymizingStrategy
+    from sluice.strategies.strict import StrictStrategy
 
-    # Cache-Key enthält die Strategie: ein Request-`mode`-Override (§7.2) desselben
-    # Profils darf nie die Instanz des anderen Modus erwischen.
-    cache_key = f"{profile.name}:{profile.strategy}"
+    register_mode("strict", lambda p: StrictStrategy(detector_profile=p.detector_profile))
+    register_mode("passthrough", lambda p: PassthroughStrategy())
+    register_mode("generalizing", lambda p: GeneralizingStrategy())
+    register_mode(
+        "pseudonymizing",
+        lambda p: PseudonymizingStrategy(ttl_seconds=p.reversible.ttl_seconds if p.reversible else 3600),
+    )
+    _builtins_loaded = True
+
+
+def registered_modes() -> set[str]:
+    """Alle bekannten Modus-Namen (Built-ins + Dritt-Registrierungen)."""
+    _ensure_builtins()
+    return set(_MODE_FACTORIES)
+
+
+def is_registered_mode(name: str) -> bool:
+    """Ob `name` ein registrierter Modus ist (für Profil-Validierung, §4)."""
+    _ensure_builtins()
+    return name in _MODE_FACTORIES
+
+
+def select_mode(profile: Profile) -> Mode:
+    """Zieht aus `profile.mode` die Modus-Instanz aus der Registry (Spec §3)."""
+    _ensure_builtins()
+    factory = _MODE_FACTORIES.get(profile.mode)
+    if factory is None:  # fail-closed: unbekannter Modus ist ein Konfigurationsfehler
+        raise ValueError(f"Unbekannter Modus '{profile.mode}' in Profil '{profile.name}'.")
+
+    # Cache-Key enthält den Modus: ein Request-`mode`-Override (§7.2) desselben Profils
+    # darf nie die Instanz eines anderen Modus erwischen.
+    cache_key = f"{profile.name}:{profile.mode}"
     cached = _instances.get(cache_key)
     if cached is not None:
         return cached
 
-    strategy: SanitizationStrategy
-    if profile.strategy == "generalizing":
-        strategy = GeneralizingStrategy()
-    elif profile.strategy == "pseudonymizing":
-        rev = profile.reversible
-        strategy = PseudonymizingStrategy(
-            ttl_seconds=rev.ttl_seconds if rev else 3600,
-        )
-    else:  # fail-closed: unbekannte Strategie ist ein Konfigurationsfehler
-        raise ValueError(f"Unbekannte Strategie '{profile.strategy}' in Profil '{profile.name}'.")
+    instance = factory(profile)
+    _instances[cache_key] = instance
+    return instance
 
-    _instances[cache_key] = strategy
-    return strategy
+
+# Rückwärtskompatibler Alias (Rev. 9).
+select_strategy = select_mode
 
 
 __all__ = [
     "EgressPayload",
+    "Mode",
+    "ModeFactory",
     "Sanitized",
     "SanitizationStrategy",
     "Scope",
     "StreamReverserProtocol",
+    "is_registered_mode",
+    "register_mode",
+    "registered_modes",
+    "select_mode",
     "select_strategy",
 ]

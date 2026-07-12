@@ -30,6 +30,7 @@ class DenyPattern:
     pattern: re.Pattern[str]
     per_match: bool = False
     validate: Callable[[str], bool] | None = None
+    placeholder: str = "[redacted]"  # Ersatz beim Auto-Redigieren (strict-Modus, §3)
 
 
 @dataclass(frozen=True)

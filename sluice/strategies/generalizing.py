@@ -19,6 +19,7 @@ from sluice.strategies import EgressPayload, Sanitized, Scope, StreamReverserPro
 class GeneralizingStrategy:
     reversible = False
     name = "generalizing"
+    enforce_verifier = True  # der Verifier greift unter diesem Modus fail-closed (§5)
 
     async def forward(self, payload: EgressPayload, scope: Scope | None) -> Sanitized:
         """Reicht den generalisierten Konsumenten-Inhalt als Egress-Kandidaten durch.

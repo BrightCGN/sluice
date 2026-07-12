@@ -15,23 +15,35 @@ Lebenszyklus. Seit **Spec-Revision 2 (2026-07-08)** spricht Sluice die Provider 
 OpenAI, Gemini, Mistral) **selbst** über Adapter an (§7.3) — das PrismClaw-Gateway liegt nicht
 mehr im Pfad. Konsumenten binden ein dünnes Client-SDK ein.
 
-Sluice ist das DSGVO-Argument in Code-Form: **eine** Policy, **ein** Audit-Log, **ein**
-deterministischer Riegel, auf den bei einer Prüfung gezeigt wird.
+Seit **Spec-Revision 9 (2026-07-12)** ist Sluice ein **erweiterbares Egress-Sanitisierungs-
+Framework**, kein einzelner *erzwungener* Riegel mehr: **Modi sind eine Registry** (§3),
+`passthrough` ist ein First-Class-Modus, die **Modus-Wahl gehört dem Konsumenten**, das
+**Logging dem Betreiber**. Sluice ist ein **technischer** Egress-Riegel, **kein Compliance-
+Zertifikat** — bewusst *keine* „DSGVO-/BSI-konform"-Zusage (die müsste extern geprüft werden).
+Was bleibt: **eine** Policy-Form (Profil), **ein** konfigurierbares Audit-Log, **eine**
+Registry austauschbarer Modi über *einem* Interface.
 
 ---
 
-## Die drei Invarianten (NIE verändern)
+## Sichere Defaults & das `strict`-Verhalten (früher: die drei Invarianten)
 
-Jeder Egress läuft durch dieselbe Kette. Der Strategie-**Schalter** tauscht nur das
-Strategie-Objekt — er verändert diese drei Schichten nicht:
+**Rev. 9 hat die drei „Invarianten" umgedeutet:** sie sind keine *globalen* Invarianten mehr,
+sondern das **Verhalten des `strict`-Modus** und der **sicheren Auslieferungs-Defaults**. Der
+Modus-**Schalter** wählt jetzt aus einer *Registry*; `passthrough` und schwächere Modi dürfen
+abweichen — aber nur nach **expliziter** Konsumenten-Wahl, nie geerbt. Was `strict` (Default)
+weiterhin garantiert:
 
 1. **Profil-Gate zuerst.** Kein Profil → nichts raus (Default-Deny). `egress_enabled=false`
-   (souverän) → nichts raus, egal welche Strategie.
-2. **Verifier gleich streng in beiden Modi.** Der deterministische Riegel (`verify_no_identifiers`)
-   liegt *unter* der Strategie, nicht in ihr. „Reversibel" ist **kein** Grund, ihn zu lockern —
-   auch dann darf nur ein *Pseudonym* raus, nie ein echter Wert, den das Mapping übersah.
-   Fail-closed: findet er irgendeinen rohen Identifier → blockieren.
-3. **Audit bei jedem Durchlass.** Append-only, released *und* blocked, reviewbares Vorher/Nachher.
+   (souverän) → nichts raus, egal welcher Modus. Fehlt das `mode`-Feld → **`strict`**, nie
+   `passthrough` (safe by default).
+2. **Verifier fail-closed — als Baustein, den `strict`/`full`/`pseudonymizing` komponieren.**
+   Der deterministische Riegel (`verify_no_identifiers`) liegt *unter* der Transformation. In
+   diesen Modi lockert „reversibel" ihn nie — nur ein *Pseudonym* raus, nie ein roher Wert.
+   `passthrough` komponiert ihn bewusst *nicht* (§2.1). **Innerhalb eines Modus, der ihn nutzt,
+   wird er nie gelockert.**
+3. **Audit — Detailgrad wählt der Betreiber** (`off | metadata | full`, Default `metadata`).
+   Wo geschrieben wird: append-only, released *und* blocked. Der Betreiber-Schalter ändert den
+   Sanitisierungs-Modus nicht.
 
 ---
 
@@ -41,7 +53,7 @@ Das ist die zentrale Urteilsentscheidung des Projekts (Spec §1.1). Sie falsch z
 Sluice undicht oder nicht wiederverwendbar. **Nicht selbst raten — gegen die Spec bauen.**
 
 - **In Sluice (generischer Mechanismus):** Profil-Gate, Verifier-Engine, Audit, Diff-Mechanik,
-  das Ausführen der gewählten Strategie.
+  die Modus-Registry und das Ausführen des gewählten Modus.
 - **Beim Konsumenten (Domäne/Policy):** die **semantische Generalisierung** (aus einem
   validierten Fix die übertragbare Lektion machen — das ist Temper-Businesslogik, nicht Sluice),
   die konkreten Detektor-**Muster** (als Profil deklariert), die Provider-Allowlist.
@@ -58,19 +70,26 @@ weiterzumachen.
 
 ---
 
-## Strategie-Schalter
+## Modus-Registry (Rev. 9)
 
-`SanitizationStrategy` (Protocol) mit zwei Implementierungen, profilgewählt:
+`Mode` (Protocol, vormals `SanitizationStrategy`) — eine **Registry** benannter Modi,
+profil-/request-gewählt; **Dritte registrieren eigene** (Open-Source-Erweiterungspunkt). Jeder
+Modus deklariert seine Eigenschaften selbst (`name`, `reversible`) und entscheidet, ob er den
+Verifier (§5) komponiert. Eingebaute Modi (initiale Menge, erweiterbar):
 
-- **`GeneralizingStrategy`** — `reversible=False`, **DEFAULT (Spec-Revision 4, safety
-  first)**. Einbahnstraße: `forward()` nur; Reverse-Methoden werfen `NotImplementedError`.
-  Herkunft: Tempers `egress/`-Datenfluss.
-- **`PseudonymizingStrategy`** — `reversible=True`, **explizites Opt-in** (per Profil oder
-  Request-`mode: "reversible"`). forward + reverse + `stream_reverser` (Holdback-Puffer) +
-  `reverse_obj` (Tool-Args) + Mapping-Lebenszyklus. Herkunft: PrismClaws `prismclaw.anon`.
+- **`strict`** — `reversible=False`, **Auslieferungs-Default**. Transformiert + Verifier
+  fail-closed. Trägt die früheren „Invarianten"-Eigenschaften.
+- **`passthrough`** — kein Verifier, keine Transformation (§2.1). **Explizites Opt-in.** Für
+  bereits nicht-sensible Daten, vertrauenswürdige Ziele, Experimentieren.
+- **`generalizing`** — `reversible=False`. `forward()` verifiziert nur den vom Konsumenten
+  *bereits generalisierten* Text. Herkunft: Tempers `egress/`-Datenfluss.
+- **`pseudonymizing`** — `reversible=True`, **explizites Opt-in** (Profil `mode`/Request
+  `mode: "reversible"`). forward + reverse + `stream_reverser` (Holdback) + `reverse_obj` +
+  Mapping-Lebenszyklus. Herkunft: PrismClaws `prismclaw.anon`.
 
-Reversibel ist die schwächere DSGVO-Zusage (Mapping-Tabelle bleibt personenbezogen) und führt
-Zustand ein — daher **nie geerbt, immer bewusst deklariert**.
+Reversibel ist die schwächere Zusage (Mapping-Tabelle bleibt personenbezogen) und führt Zustand
+ein — daher **nie geerbt, immer bewusst deklariert**. Ebenso `passthrough`/fail-open: nur nach
+expliziter Wahl, optional per `allowed_modes` pro Profil sperrbar (§4.1).
 
 ---
 
@@ -135,7 +154,10 @@ tests/                   # kein Netz; httpx.MockTransport wo HTTP nötig
 - **Nur an diesem Repo arbeiten.** Temper/Crate/PrismClaw höchstens **read-only** als Referenz
   fürs Interface-Design ansehen — **nie** im selben Auftrag an ihnen operieren. Konsumenten-
   Migration ist eine spätere, getrennte Phase.
-- **Verifier nie lockern**, auch nicht „weil reversibel".
+- **Innerhalb eines Modus, der den Verifier komponiert (`strict`/`full`/`pseudonymizing`), nie
+  lockern** — auch nicht „weil reversibel". Ob ein Modus ihn überhaupt komponiert, ist Modus-
+  Entscheidung (`passthrough` tut es nicht); der *Auslieferungs-Default bleibt `strict`* mit
+  Verifier fail-closed (Rev. 9, §4.3/§5).
 - **Versionierte Schnittstelle ab Tag 1** (`/v1/…`) — Sluice ist eine Abhängigkeit mit Vertrag;
   ein Breaking Change trifft sonst alle Konsumenten gleichzeitig.
 - **Grenze Mechanismus/Domäne (oben) nicht selbst raten** — gegen die Spec bauen, im Zweifel fragen.
