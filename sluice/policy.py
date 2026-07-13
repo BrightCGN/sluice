@@ -96,17 +96,35 @@ def check_provider_allowed(profile: Profile, provider: str) -> EgressDecision:
     return EgressDecision(allowed=True, reason=f"Provider '{provider}' erlaubt.")
 
 
-def check_mode_allowed(profile: Profile, mode: str) -> EgressDecision:
-    """Modus-Allowlist pro Profil (Spec §4.1, Rev. 9).
+def check_mode_allowed(
+    profile: Profile, mode: str, *, enforce_verifier: bool = True
+) -> EgressDecision:
+    """Modus-Allowlist pro Profil (Spec §4.1, Rev. 9; fail-closed für fail-open-Modi Rev. 11).
 
-    Leere `allowed_modes` = alle Modi erlaubt (Default, maximale Freiheit). Sonst muss
-    der gewählte Modus explizit gelistet sein — ein Betreiber sperrt so schwache Modi
-    (z. B. `passthrough`) gezielt; nicht erlaubt ⇒ fail-closed.
+    Zwei Schranken, beide fail-closed:
+
+    1. **Explizite Allowlist:** Ist `allowed_modes` gesetzt, muss `mode` darin stehen —
+       ein Betreiber sperrt so *jeden* nicht gelisteten Modus gezielt.
+    2. **Fail-open-Opt-in (Rev. 11):** Ein Modus *ohne* Verifier (`enforce_verifier=False`,
+       heute nur `passthrough`, §2.1) ist **nur** erlaubt, wenn er *ausdrücklich* in
+       `allowed_modes` steht. Eine leere/fehlende Allowlist sperrt ihn — „Vergessen = zu".
+       Verifizierende Modi bleiben per leerer Allowlist frei (sie leaken nicht, §5).
+
+    `enforce_verifier` liefert der Guard aus der gewählten Modus-Instanz (§3), damit die
+    Regel generisch am Modus-Merkmal greift, nicht am Namen `passthrough`.
     """
     if profile.allowed_modes and mode not in profile.allowed_modes:
         return EgressDecision(
             allowed=False,
             reason=f"Modus '{mode}' nicht in allowed_modes von '{profile.name}' (§4.1).",
+        )
+    if not enforce_verifier and mode not in profile.allowed_modes:
+        return EgressDecision(
+            allowed=False,
+            reason=(
+                f"Fail-open-Modus '{mode}' (ohne Verifier) braucht explizites "
+                f"allowed_modes-Opt-in in Profil '{profile.name}' (§4.1/§4.3, Rev. 11)."
+            ),
         )
     return EgressDecision(allowed=True, reason=f"Modus '{mode}' erlaubt.")
 

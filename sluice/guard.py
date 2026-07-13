@@ -92,14 +92,21 @@ async def guarded_egress(
         if not provider_decision.allowed:
             return _blocked(provider_decision.reason)
 
-    # Modus-Allowlist (§4.1, Rev. 9) — ein per Profil gesperrter Modus wird fail-closed
-    # abgewiesen, auch wenn ein Request ihn wählt.
-    mode_decision = check_mode_allowed(profile, profile.mode)
+    # 2. Modus wählen (der Schalter zieht ihn aus der Registry, §3). select_mode hat
+    #    keinen Egress-Effekt — es baut/cached nur die Instanz; forward() folgt erst nach
+    #    der Allowlist-Prüfung.
+    chosen = mode if mode is not None else select_mode(profile)
+
+    # Modus-Allowlist (§4.1) — ein per Profil gesperrter Modus wird fail-closed abgewiesen,
+    # auch wenn ein Request ihn wählt. Rev. 11: fail-open-Modi (ohne Verifier, §2.1) brauchen
+    # explizites Opt-in in allowed_modes — die leere Allowlist erlaubt sie NICHT. Die Regel
+    # greift generisch über chosen.enforce_verifier (§3), nicht am Namen `passthrough`.
+    mode_decision = check_mode_allowed(
+        profile, chosen.name, enforce_verifier=chosen.enforce_verifier
+    )
     if not mode_decision.allowed:
         return _blocked(mode_decision.reason)
 
-    # 2. Modus (der Schalter zieht ihn aus der Registry, §3).
-    chosen = mode if mode is not None else select_mode(profile)
     sanitized: Sanitized = await chosen.forward(payload, scope)
 
     texts = sanitized.texts()

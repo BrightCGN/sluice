@@ -30,7 +30,7 @@ Ein Modus ist ein austauschbarer Egress-Handler; Dritte registrieren eigene übe
 `register_mode`. Eingebaut:
 
 - **`strict`** (Default) — auto-redigierend über die Detektor-Muster, irreversibel, Verifier fail-closed.
-- **`passthrough`** — kein Verifier, keine Transformation; **explizites Opt-in**, der Konsument trägt das Risiko (§2.1).
+- **`passthrough`** — kein Verifier, keine Transformation; **explizites Opt-in im Profil** (`allowed_modes`, §4.1) — eine leere Allowlist sperrt ihn fail-closed (Rev. 11), die Request-Wahl allein reicht nicht. Der Konsument trägt das Risiko (§2.1).
 - **`generalizing`** — verifiziert nur den vom Konsumenten *bereits* generalisierten Text.
 - **`pseudonymizing`** (Opt-in) — forward + reverse mit Streaming-Holdback, Tool-Arg-Reversal und session-scoped Mapping (TTL, deterministisches Aufräumen).
 

@@ -1,6 +1,17 @@
 # Sluice — Boundary- & Contract-Spec (v1)
 
-> **Stand:** 2026-07-12. **Revision 10:** Profil-**Wörterbuch** (`dictionary_terms`, §4/§5.1) —
+> **Stand:** 2026-07-13. **Revision 11:** `allowed_modes` wird **fail-closed für fail-open-Modi**
+> (§4.1/§4.3). Die leere Allowlist erlaubt weiterhin alle **verifizierenden** Modi
+> (`strict`/`generalizing`/`pseudonymizing`) — aber ein **Modus ohne Verifier** (`enforce_verifier=false`,
+> heute nur `passthrough`, §2.1) ist **nur** wirksam, wenn das Profil ihn **ausdrücklich** in
+> `allowed_modes` nennt. Eine leere/fehlende Allowlist **sperrt** ihn jetzt (⇒ 403), auch wenn ein
+> Request ihn wählt. Damit deckt sich das Verhalten mit der Rev.-9-Zusage „*fail-open-Modi sind
+> explizites Opt-in*" (§2): Vergessen der Allowlist heißt jetzt **zu**, nicht **offen** — der Riegel
+> ist auf der Modus-Achse fail-closed. Rein additiv für verifizierende Modi (unverändert frei);
+> Bruch nur für Profile, die `passthrough` bislang *ohne* Nennung in `allowed_modes` nutzten — die
+> müssen ihn nun listen. Die Regel greift generisch über `enforce_verifier` (§3), nicht am Namen
+> `passthrough` — jeder künftige verifierlose Dritt-Modus erbt dieselbe Opt-in-Pflicht.
+> **Revision 10:** Profil-**Wörterbuch** (`dictionary_terms`, §4/§5.1) —
 > konsument-deklarierte **Literale** (Namen, Adressen), die die generischen Regex-Detektoren
 > (`infra`/`media`) prinzipbedingt nicht erkennen. Sie ergänzen das Detektor-Set des Profils:
 > `strict` redigiert sie zu `[NAME]`, der Verifier blockt sie **fail-closed in jedem Modus**.
@@ -315,13 +326,24 @@ detector_profile    = "financial"
 Weil Modell-Adapter generisch sind (§7.3), unterscheidet sich die *Provider*-Erlaubnis pro Profil
 — Provider divergieren in Retention/Training. Bank-Profil ⇒ nur ZDR/lokal; Crate darf großzügiger.
 
-**Modus-Allowlist (`allowed_modes`, optional, Rev. 9).** Analog begrenzt ein Profil, welche
-Registry-Modi (§3) ein Request wählen darf. **Default: alle registrierten Modi erlaubt** — maximale
-Freiheit für Konsumenten/Experimente (Rev. 9). Ein sicherheitsbewusster Betreiber sperrt schwache
-Modi gezielt: `allowed_modes = ["strict"]` verbietet z. B. `passthrough` für dieses Profil, auch
-wenn ein Request ihn anfragt (⇒ 403, fail-closed). Wichtig: der *laufende Default* bleibt in jedem
-Fall `strict` (§4.3) — die Allowlist erweitert/beschränkt nur die *wählbaren* Modi, sie ändert nie,
-was ohne explizite Wahl passiert.
+**Modus-Allowlist (`allowed_modes`, optional, Rev. 9; fail-closed für fail-open-Modi seit Rev. 11).**
+Analog begrenzt ein Profil, welche Registry-Modi (§3) ein Request wählen darf. Die Semantik der
+**leeren** (oder fehlenden) Allowlist ist seit Rev. 11 **abgestuft nach `enforce_verifier`** (§3):
+
+- **Verifizierende Modi** (`enforce_verifier=true` — `strict`, `generalizing`, `pseudonymizing`):
+  eine leere Allowlist erlaubt sie **alle** — maximale Freiheit für Konsumenten/Experimente. Diese
+  Modi komponieren den Verifier fail-closed (§5), können also nicht versehentlich roh leaken.
+- **Fail-open-Modi** (`enforce_verifier=false` — heute nur `passthrough`, §2.1): eine leere Allowlist
+  **sperrt** sie (⇒ 403, fail-closed). Sie sind **nur** wirksam, wenn das Profil sie **ausdrücklich**
+  in `allowed_modes` listet — auch wenn ein Request sie wählt. *Vergessen = zu.*
+
+Ein sicherheitsbewusster Betreiber muss also nichts *hinzufügen*, um `passthrough` zu sperren — es
+ist per Default gesperrt; er *nennt* es explizit (`allowed_modes = ["strict", "passthrough"]`), um es
+freizugeben. Umgekehrt sperrt eine nicht-leere Allowlist wie bisher **jeden** nicht gelisteten Modus,
+egal ob verifizierend. Wichtig: der *laufende Default* bleibt in jedem Fall `strict` (§4.3) — die
+Allowlist erweitert/beschränkt nur die *wählbaren* Modi, sie ändert nie, was ohne explizite Wahl
+passiert. Die Regel greift **generisch über `enforce_verifier`**, nicht am Namen `passthrough`: ein
+künftiger verifierloser Dritt-Modus (§3) unterliegt automatisch derselben Opt-in-Pflicht.
 
 ### 4.2 `egress_enabled = false` = souveränes Profil
 Maschinenlesbare Form von Prinzip 16 (Tempers `policy.py`). Guard lässt **nichts** durch,
@@ -332,9 +354,15 @@ Ein Konsument **ohne** Profil bekommt **nichts** raus. Kein Vererben fremder Pro
 Neue Projekte erben nie versehentlich Crates lockere Policy.
 
 **Sicherer Default-Modus (Rev. 9):** Lässt ein Profil das `mode`-Feld weg, gilt **`strict`** —
-nicht `passthrough`. Die schwachen Modi (`passthrough`, fail-open) sind **nur** wirksam, wenn das
-Profil sie ausdrücklich nennt bzw. der Request sie setzt (§7.2). *Safe by default:* ein Vertippen
-oder ein kopiertes Skelett-Profil öffnet nie versehentlich die Boundary; „offen" muss dastehen.
+nicht `passthrough`. *Safe by default:* ein Vertippen oder ein kopiertes Skelett-Profil öffnet nie
+versehentlich die Boundary; „offen" muss dastehen.
+
+**Fail-open-Modi brauchen Profil-Opt-in (Rev. 11):** Ein verifierloser Modus (`enforce_verifier=false`,
+heute `passthrough`) ist **nur** wirksam, wenn ihn die **`allowed_modes`** des Profils ausdrücklich
+nennt (§4.1). Ihn per **Request** zu wählen genügt **nicht**, wenn das Profil ihn nicht freigegeben
+hat — die Request-Wahl wird gegen dieselbe Allowlist geprüft und fail-closed abgewiesen (⇒ 403).
+Damit ist „offen" eine **Betreiber**-Entscheidung im Profil, nicht eine, die ein Konsument allein per
+Request treffen kann. (Verifizierende Modi bleiben per Request frei wählbar, §4.1 — sie leaken nicht.)
 
 ### 4.4 Mandanten-Isolation
 Geteilter Code, aber getrennte Policies, Audit-Streams, Credentials und Budgets **pro Profil**.
@@ -458,9 +486,11 @@ POST /v1/chat/completions
 `mode` (optional): ein **Modus-Name aus der Registry** (§3) — `strict` | `passthrough` |
 `pseudonymizing` | … — überschreibt den Profil-Modus für diesen Request (Rev. 9; die alten Werte
 `"irreversible"`/`"reversible"` bleiben als Alias auf `strict`/`pseudonymizing` gültig). Fehlt er,
-gilt der Profil-Modus, sonst `strict` (§4.3). Der gewählte Modus wird gegen die optionale
+gilt der Profil-Modus, sonst `strict` (§4.3). Der gewählte Modus wird gegen die
 `allowed_modes`-Allowlist des Profils geprüft (§4.1); eine nicht erlaubte Wahl ⇒ fail-closed
-(403). `provider` (optional): default ist der erste Eintrag der Provider-Allowlist; jede Wahl
+(403). **Seit Rev. 11:** ein per Request gewählter **fail-open-Modus** (`enforce_verifier=false`,
+z. B. `passthrough`) wird nur durchgelassen, wenn das Profil ihn **ausdrücklich** in `allowed_modes`
+listet — eine leere Allowlist sperrt ihn, die Request-Wahl allein reicht nicht (§4.3). `provider` (optional): default ist der erste Eintrag der Provider-Allowlist; jede Wahl
 wird gegen sie geprüft (§4.1).
 
 Sluice-intern:  forward(scope) → verify → Provider-Adapter (§7.3) → stream_reverser(scope) → Tool-Args reverse

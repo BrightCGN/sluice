@@ -23,6 +23,7 @@ PASS = Profile(
     mode="passthrough",
     allowed_purposes=("x",),
     detector_profile="infra",
+    allowed_modes=("passthrough",),  # Rev. 11: fail-open-Modus braucht explizites Opt-in (§4.1)
 )
 
 
@@ -131,16 +132,40 @@ async def test_allowed_modes_blocks_forbidden_mode() -> None:
     assert "allowed_modes" in outcome.reason
 
 
-async def test_empty_allowed_modes_permits_everything() -> None:
-    # Default (leer) = alle Modi erlaubt, maximale Freiheit (§4.1, Rev. 9).
-    assert PASS.allowed_modes == ()
+async def test_empty_allowed_modes_permits_verifier_modes() -> None:
+    # Rev. 11: leere Allowlist erlaubt weiterhin ALLE verifizierenden Modi (sie leaken
+    # nicht, §5). strict mit leerer allowed_modes läuft ganz normal durch.
+    strict_open = Profile(
+        name="open", mode="strict", allowed_purposes=("x",), detector_profile="infra"
+    )
+    assert strict_open.allowed_modes == ()
     outcome = await guarded_egress(
-        profile=PASS,
+        profile=strict_open,
         purpose="x",
-        payload=EgressPayload(raw_text="frei"),
+        payload=EgressPayload(raw_text="nichts sensibles"),
         audit=AuditLog(),
     )
     assert outcome.released is True
+
+
+async def test_passthrough_needs_explicit_opt_in() -> None:
+    # Rev. 11 (Kernänderung): fail-open-Modus mit LEERER allowed_modes ⇒ fail-closed.
+    # „Vergessen der Allowlist = zu", nicht „offen" (§4.1/§4.3).
+    forgot = Profile(
+        name="forgot",
+        mode="passthrough",
+        allowed_purposes=("x",),
+        detector_profile="infra",
+        allowed_modes=(),  # Betreiber hat passthrough NICHT freigegeben
+    )
+    outcome = await guarded_egress(
+        profile=forgot,
+        purpose="x",
+        payload=EgressPayload(raw_text="192.168.1.1"),
+        audit=AuditLog(),
+    )
+    assert outcome.released is False
+    assert "Opt-in" in outcome.reason
 
 
 # ---------- Registry-Erweiterungspunkt (§3) ----------

@@ -29,6 +29,9 @@ PROFILES = {
         allowed_purposes=("external_escalation",),
         provider_allowlist=("claude",),
         detector_profile="infra",
+        # Rev. 11: passthrough ist ein fail-open-Modus und muss explizit freigegeben sein,
+        # damit der Request-Override (mode=passthrough) durchgeht (§4.1/§4.3).
+        allowed_modes=("generalizing", "passthrough"),
     ),
 }
 
@@ -298,3 +301,17 @@ async def test_unknown_request_mode_is_400() -> None:
         headers={"X-Sluice-Profile": "temper"},
     )
     assert resp.status_code == 400
+
+
+async def test_request_passthrough_without_opt_in_is_403() -> None:
+    # Rev. 11: aider-code hat leere allowed_modes → passthrough (fail-open) ist NICHT
+    # freigegeben; die Request-Wahl allein reicht nicht (§4.1/§4.3), fail-closed 403.
+    client, adapter = _client()
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={**BODY, "mode": "passthrough"},
+        headers={"X-Sluice-Profile": "aider-code"},
+    )
+    assert resp.status_code == 403
+    assert "Opt-in" in resp.json()["error"]["reason"]  # geblockt am Modus, nicht am Gate
+    assert adapter.calls == []

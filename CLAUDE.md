@@ -89,7 +89,11 @@ Verifier (§5) komponiert. Eingebaute Modi (initiale Menge, erweiterbar):
 
 Reversibel ist die schwächere Zusage (Mapping-Tabelle bleibt personenbezogen) und führt Zustand
 ein — daher **nie geerbt, immer bewusst deklariert**. Ebenso `passthrough`/fail-open: nur nach
-expliziter Wahl, optional per `allowed_modes` pro Profil sperrbar (§4.1).
+expliziter Wahl. **Seit Rev. 11 fail-closed auf der Modus-Achse:** ein Modus *ohne* Verifier
+(`enforce_verifier=false`, heute `passthrough`) ist **nur** wirksam, wenn das Profil ihn
+**ausdrücklich** in `allowed_modes` nennt — leere/fehlende Allowlist **sperrt** ihn (⇒ 403), die
+Request-Wahl allein reicht nicht (§4.1/§4.3). Verifizierende Modi bleiben per leerer Allowlist frei.
+Die Regel greift generisch über `enforce_verifier`, nicht am Namen `passthrough`.
 
 ---
 
