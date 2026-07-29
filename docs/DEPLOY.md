@@ -120,6 +120,9 @@ sudo -u sluice /opt/sluice/.venv/bin/python -c "import sluice.server; print('ok'
 **Ohne diese Datei startet Sluice im Default-Deny (§4.3): der Service läuft, blockiert aber
 jeden Egress.** Das ist Absicht (fail-closed), keine Störung.
 
+> Vollständige Feld-Referenz inkl. Fallstricken und Fehlerbildern: **`PROFILES.md`**. Hier steht
+> nur das Startbeispiel für die Erstinstallation.
+
 Jedes Projekt bekommt **ein** Profil. Startbeispiel:
 
 ```toml

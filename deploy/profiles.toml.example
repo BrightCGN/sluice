@@ -1,0 +1,49 @@
+# Irreversibel ist der Default (Rev. 9, safety first) — `mode` kann entfallen,
+# dann gilt `strict`. Verifizierende Modi (generalizing/pseudonymizing) brauchen
+# kein `allowed_modes`-Opt-in; nur fail-open-Modi (passthrough) verlangen die
+# explizite Nennung in `allowed_modes` (Rev. 11, §4.1/§4.3).
+[profile."temper"]
+mode                = "generalizing"
+egress_enabled      = true
+allowed_purposes    = ["external_escalation", "promotion_upload"]
+provider_allowlist  = ["anthropic", "gemini"]
+detector_profile    = "infra"
+
+# passthrough = komplett offen: kein Verifier, keine Transformation — der Payload
+# läuft unverändert durch (nur Profil-Gate + Audit greifen noch). BEWUSSTE Entscheidung
+# zum Beobachten des Roh-Egress; Rev. 11 verlangt dafür das explizite allowed_modes-Opt-in
+# (sonst 403). Sichtbar wird der Durchlass nur mit SLUICE_AUDIT_LEVEL=full in sluice.env.
+[profile."prismclaw"]
+mode                = "passthrough"
+egress_enabled      = true
+allowed_purposes    = ["external_escalation", "promotion_upload"]
+provider_allowlist  = ["anthropic", "gemini", "openai"]
+detector_profile    = "infra"                          # bei passthrough wirkungslos (kein Verifier)
+allowed_modes       = ["passthrough"]                  # Rev.-11-Pflicht für fail-open-Modi (§4.1/§4.3)
+
+
+# Reversibel ist explizites Opt-in (§2) — nur wo die Rückübersetzung gebraucht wird.
+[profile."aider-code"]
+mode                = "pseudonymizing"
+egress_enabled      = true
+allowed_purposes    = ["code_completion"]
+provider_allowlist  = ["anthropic", "gemini"]
+detector_profile    = "code"
+  [profile."aider-code".reversible]
+  scope             = "session"
+  ttl_seconds       = 3600
+  storage           = "memory"
+
+
+# `strict` redigiert selbst (substituiert [EMAIL]/[IP]/[NAME]) — der richtige Modus,
+# wenn der Konsument rohen Text schickt (Crates Kuratierungs-Thema) und die Antwort
+# nichts zurückzumappen braucht. `dictionary_terms` (Rev. 10) deckt freie Namen/Adressen
+# ab, die die Regex-Detektoren nicht fangen. Kein `allowed_modes` nötig — `strict` ist
+# verifizierend und per leerer Allowlist frei (Rev. 11).
+[profile."crate"]
+mode                = "strict"
+egress_enabled      = true
+allowed_purposes    = ["playlist_curation"]
+provider_allowlist  = ["anthropic", "gemini"]
+detector_profile    = "media"
+dictionary_terms    = ["<haushaltsname>", "<strasse hausnr>"]  # echte Namens-/Adressliste auf der VM
