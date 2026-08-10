@@ -116,35 +116,48 @@ if [[ ! -d "${APP_DIR}/.venv" ]]; then
     log "Erzeuge venv …"
     python3 -m venv "${APP_DIR}/.venv"
 fi
+# Rechte über den ganzen Baum geradeziehen. Als Funktion und nicht als einmalige Zeile,
+# weil sie nach JEDEM pip-Lauf gelten muss: pip legt Dateien mit der umask von root an,
+# und ist die eng (0077), sind die neu geschriebenen Konsolen-Skripte — darunter
+# .venv/bin/uvicorn — für den Service-User nicht ausführbar. Der Dienst scheitert dann
+# mit 203/EXEC „Permission denied", bevor Python überhaupt startet.
+normalize_app_perms() {
+    [[ -d "${APP_DIR}" ]] || return 0
+    # Kern-User besitzt den Baum; die Gateway-User teilen sich NUR den Code (o+rX),
+    # sonst nichts (DEPLOY.md §3). Provider-Keys liegen in /etc/sluice, nie hier.
+    chown -R "${SERVICE_USER}:${SERVICE_USER}" "${APP_DIR}"
+    chmod -R a+rX "${APP_DIR}"
+
+    # Der Modell-Cache ist die Ausnahme: das rekursive a+rX oben würde seine 700
+    # aufreißen und das chown ihn dem Kern-User zuschlagen, worauf der NER-Dienst ihn
+    # nicht mehr aktualisieren könnte. Deshalb danach, und rekursiv.
+    if [[ "${WITH_NER}" == "1" && -d "${APP_DIR}/models" ]]; then
+        chown -R "${NER_USER}:${NER_USER}" "${APP_DIR}/models"
+        chmod -R go-rwx "${APP_DIR}/models"
+    fi
+}
+# Sicherheitsnetz: auch ein Abbruch mitten im Skript darf den Baum nicht in einem
+# Zustand hinterlassen, in dem der Kern nicht mehr startet.
+trap normalize_app_perms EXIT
+
 log "Installiere Sluice …"
 "${APP_DIR}/.venv/bin/pip" install --quiet --upgrade pip
 "${APP_DIR}/.venv/bin/pip" install --quiet "${APP_DIR}"
+
+# Sofort normalisieren, nicht erst am Ende von Abschnitt 4: ab hier ist der Kern
+# startfähig, und alles Folgende — insbesondere der große, fehleranfällige
+# NER-Extra-Install — kann ihn nicht mehr mit in den Abgrund ziehen.
+normalize_app_perms
 
 # Modell-Abhängigkeiten NUR bei aktivem NER-Dienst. Sie landen zwangsläufig im selben
 # venv (ein Interpreter für alle Units) — der Kern *importiert* sie deshalb trotzdem
 # nicht: gliner/torch werden erst in sluice.ner.engine lazy geladen, und die läuft nur
 # im NER-Prozess. Der Kern-Code bleibt frei von Modell-Abhängigkeiten (§7.5).
 if [[ "${WITH_NER}" == "1" ]]; then
+    install -d -o "${NER_USER}" -g "${NER_USER}" -m 700 "${APP_DIR}/models"
     log "Installiere NER-Extra '[${NER_EXTRA}]' — das dauert (torch/ONNX sind groß) …"
     "${APP_DIR}/.venv/bin/pip" install --quiet "${APP_DIR}[${NER_EXTRA}]"
-fi
-
-# Kern-User besitzt den Baum; die Gateway-User teilen sich NUR den Code (o+rX),
-# sonst nichts (DEPLOY.md §3). Provider-Keys liegen in /etc/sluice, nie hier.
-chown -R "${SERVICE_USER}:${SERVICE_USER}" "${APP_DIR}"
-chmod -R a+rX "${APP_DIR}"
-
-# Modell-Cache NACH dem chown/chmod oben — sonst räumt das rekursive a+rX die 700 wieder
-# weg. Als einziges Verzeichnis unter /opt/sluice ist es beschreibbar (die Unit gibt es
-# über ReadWritePaths frei) und gehört dem NER-User allein.
-#
-# Rekursiv zurücksetzen, nicht nur das Verzeichnis: bei einem Re-Run ist der Cache schon
-# gefüllt und das chown -R oben hat die Gewichte dem Kern-User zugeschlagen — der Dienst
-# könnte den Cache dann nicht mehr aktualisieren.
-if [[ "${WITH_NER}" == "1" ]]; then
-    install -d -o "${NER_USER}" -g "${NER_USER}" -m 700 "${APP_DIR}/models"
-    chown -R "${NER_USER}:${NER_USER}" "${APP_DIR}/models"
-    chmod -R go-rwx "${APP_DIR}/models"
+    normalize_app_perms
 fi
 
 # --- 5. Konfiguration --------------------------------------------------------
