@@ -7,6 +7,11 @@
 # (Rev. 8, User-Isolation). Idempotent gedacht: mehrfaches Ausführen soll nichts
 # kaputt machen — bestehende Konfiguration in /etc/sluice wird NIE überschrieben.
 #
+# Optional der NER-Dienst (Rev. 12, §7.5) — bewusst OPT-IN, weil er Modell-Gewichte
+# und (im torch-Pfad) über ein Gigabyte Abhängigkeiten mitbringt, die eine VM ohne
+# `pii_ner`-Profil nichts angehen:
+#   SLUICE_WITH_NER=1 bash deploy/bootstrap.sh
+#
 # Voraussetzung: Debian 12 / Ubuntu 24.04 mit root/sudo, Netz, Python >= 3.11.
 # Aufruf (als root):   bash deploy/bootstrap.sh
 #
@@ -14,7 +19,7 @@
 # Ohne ausgefüllte profiles.toml und Gateway-Keys wäre das nur ein Service, der
 # alles blockiert — die Freigabe ist bewusst ein manueller, letzter Schritt.
 #
-# Bezug: docs/DEPLOY.md (Schritt 1–5), docs/SLUICE-BOUNDARY-SPEC.md (§4, §5, §7.3).
+# Bezug: docs/DEPLOY.md (Schritt 1–5), docs/SLUICE-BOUNDARY-SPEC.md (§4, §5, §7.3, §7.5).
 
 set -euo pipefail
 
@@ -33,12 +38,31 @@ PROVIDERS="${SLUICE_PROVIDERS:-anthropic openai gemini mistral}"
 DEFAULT_HOST="192.168.87.40"
 BIND_HOST="${SLUICE_BIND_HOST:-$DEFAULT_HOST}"
 
+# NER-Dienst (§7.5) — nur für Profile mit `mode = "pii_ner"`. Standardmäßig AUS: die
+# übrigen Modi (strict, pii_regex, generalizing, pseudonymizing, passthrough) brauchen
+# ihn nicht, und ein Kern ohne Modell-Abhängigkeiten ist betrieblich der schlankere.
+WITH_NER="${SLUICE_WITH_NER:-0}"
+NER_USER="sluice-ner"
+# Welcher Extra installiert wird. `ner` (torch) ist der Default; die ONNX-Varianten erst
+# NACH der Messung wählen — scripts/probe_ner_hardware.py, docs/NER-SERVICE.md.
+NER_EXTRA="${SLUICE_NER_EXTRA:-ner}"
+
 log()  { printf '\033[1;34m[bootstrap]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[bootstrap]\033[0m %s\n' "$*" >&2; }
 
 if [[ "${EUID}" -ne 0 ]]; then
     echo "Bitte als root ausführen (sudo bash deploy/bootstrap.sh)." >&2
     exit 1
+fi
+
+if [[ "${WITH_NER}" == "1" ]]; then
+    case "${NER_EXTRA}" in
+        ner|ner-onnx|ner-onnx-gpu) ;;
+        *)
+            echo "SLUICE_NER_EXTRA='${NER_EXTRA}' unbekannt — erlaubt: ner, ner-onnx, ner-onnx-gpu." >&2
+            exit 1
+            ;;
+    esac
 fi
 
 # --- 1. System-Pakete --------------------------------------------------------
@@ -61,7 +85,14 @@ log "Python ${PY_VER} ok."
 # Kern und JEDES Gateway bekommen einen eigenen User (Rev. 8): kein Gateway kann
 # Dateien oder Speicher eines anderen — oder des Kerns — lesen. Beim Umzug eines
 # Gateways auf einen eigenen Server wandert genau ein User mit.
-for u in "${SERVICE_USER}" $(for p in ${PROVIDERS}; do echo "sluice-gw-${p}"; done); do
+#
+# Der NER-Dienst bekommt aus demselben Grund einen eigenen User — mit dem Unterschied,
+# dass er als einziger Dienst *unsanitisierten* Rohtext sieht (§7.5). Ihn vom Kern zu
+# trennen heißt: das Modell ist tauschbar, ohne den Chokepoint anzufassen.
+NER_USERS=""
+[[ "${WITH_NER}" == "1" ]] && NER_USERS="${NER_USER}"
+
+for u in "${SERVICE_USER}" $(for p in ${PROVIDERS}; do echo "sluice-gw-${p}"; done) ${NER_USERS}; do
     if ! id "${u}" &>/dev/null; then
         log "Lege Service-User '${u}' an …"
         useradd --system --home "${APP_DIR}" --shell /usr/sbin/nologin "${u}"
@@ -89,10 +120,32 @@ log "Installiere Sluice …"
 "${APP_DIR}/.venv/bin/pip" install --quiet --upgrade pip
 "${APP_DIR}/.venv/bin/pip" install --quiet "${APP_DIR}"
 
+# Modell-Abhängigkeiten NUR bei aktivem NER-Dienst. Sie landen zwangsläufig im selben
+# venv (ein Interpreter für alle Units) — der Kern *importiert* sie deshalb trotzdem
+# nicht: gliner/torch werden erst in sluice.ner.engine lazy geladen, und die läuft nur
+# im NER-Prozess. Der Kern-Code bleibt frei von Modell-Abhängigkeiten (§7.5).
+if [[ "${WITH_NER}" == "1" ]]; then
+    log "Installiere NER-Extra '[${NER_EXTRA}]' — das dauert (torch/ONNX sind groß) …"
+    "${APP_DIR}/.venv/bin/pip" install --quiet "${APP_DIR}[${NER_EXTRA}]"
+fi
+
 # Kern-User besitzt den Baum; die Gateway-User teilen sich NUR den Code (o+rX),
 # sonst nichts (DEPLOY.md §3). Provider-Keys liegen in /etc/sluice, nie hier.
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${APP_DIR}"
 chmod -R a+rX "${APP_DIR}"
+
+# Modell-Cache NACH dem chown/chmod oben — sonst räumt das rekursive a+rX die 700 wieder
+# weg. Als einziges Verzeichnis unter /opt/sluice ist es beschreibbar (die Unit gibt es
+# über ReadWritePaths frei) und gehört dem NER-User allein.
+#
+# Rekursiv zurücksetzen, nicht nur das Verzeichnis: bei einem Re-Run ist der Cache schon
+# gefüllt und das chown -R oben hat die Gewichte dem Kern-User zugeschlagen — der Dienst
+# könnte den Cache dann nicht mehr aktualisieren.
+if [[ "${WITH_NER}" == "1" ]]; then
+    install -d -o "${NER_USER}" -g "${NER_USER}" -m 700 "${APP_DIR}/models"
+    chown -R "${NER_USER}:${NER_USER}" "${APP_DIR}/models"
+    chmod -R go-rwx "${APP_DIR}/models"
+fi
 
 # --- 5. Konfiguration --------------------------------------------------------
 # Grundsatz: nur anlegen, was fehlt. Eine bestehende profiles.toml oder eine
@@ -121,9 +174,23 @@ if [[ ! -f "${CFG_DIR}/sluice.env" ]]; then
     if [[ "${BIND_HOST}" != "${DEFAULT_HOST}" ]]; then
         sed -i "s/${DEFAULT_HOST}/${BIND_HOST}/g" "${CFG_DIR}/sluice.env"
     fi
+    # Läuft der NER-Dienst auf DIESER Maschine, ist die Loopback-URL die richtige und
+    # der Rohtext verlässt den Host nie. Nur beim Neuanlegen — eine bestehende
+    # sluice.env fasst das Skript grundsätzlich nicht an (siehe Hinweis unten).
+    if [[ "${WITH_NER}" == "1" ]]; then
+        sed -i 's|^# \(SLUICE_NER_URL=http://127\.0\.0\.1:17900\)$|\1|' "${CFG_DIR}/sluice.env"
+    fi
 fi
 chown root:root "${CFG_DIR}/sluice.env"
 chmod 600 "${CFG_DIR}/sluice.env"
+
+# Bestehende sluice.env + nachträglich aktivierter NER-Dienst: nicht editieren, sondern
+# sagen. Ohne URL blockiert ein pii_ner-Profil fail-closed (§5.3) — das wäre sonst ein
+# Fehlerbild, dessen Ursache der Betreiber erst im Log suchen müsste.
+if [[ "${WITH_NER}" == "1" ]] && ! grep -qE '^\s*SLUICE_NER_URL=' "${CFG_DIR}/sluice.env"; then
+    warn "In ${CFG_DIR}/sluice.env fehlt SLUICE_NER_URL — pii_ner-Profile blockieren so"
+    warn "  fail-closed. Zeile eintragen: SLUICE_NER_URL=http://127.0.0.1:17900"
+fi
 
 # 5.3 Gateway-Envs (§5.1) — je Instanz Host/Port + genau EIN Provider-Key.
 for p in ${PROVIDERS}; do
@@ -144,6 +211,23 @@ for p in ${PROVIDERS}; do
     chmod 600 "${dst}"
 done
 
+# 5.4 NER-Env (§7.5) — Modellidentität, kein Key. Wie überall: nie überschreiben.
+if [[ "${WITH_NER}" == "1" ]]; then
+    if [[ ! -f "${CFG_DIR}/ner.env" ]]; then
+        log "Lege ${CFG_DIR}/ner.env an — MODELL + REVISION MÜSSEN NOCH EINGETRAGEN WERDEN!"
+        cp "${APP_DIR}/deploy/ner.env.example" "${CFG_DIR}/ner.env"
+    fi
+    chown root:root "${CFG_DIR}/ner.env"
+    chmod 600 "${CFG_DIR}/ner.env"
+    # Ohne festgenagelte Revision ist die Anonymisierungs-Identität (§5.4) wertlos: das
+    # Modell-Repo könnte sich unter derselben Kennung ändern, und der Audit-Eintrag
+    # behauptete etwas Unbelegtes. Der Dienst startet trotzdem — deshalb hier warnen.
+    if ! grep -qE '^\s*SLUICE_NER_REVISION=\S' "${CFG_DIR}/ner.env"; then
+        warn "SLUICE_NER_REVISION in ${CFG_DIR}/ner.env ist leer — ohne festgenagelten"
+        warn "  Commit-Hash ist die Anonymisierungs-Identität (§5.4) nicht belastbar."
+    fi
+fi
+
 # --- 6. systemd-Units --------------------------------------------------------
 log "Installiere systemd-Units …"
 cp "${APP_DIR}/deploy/sluice.service" /etc/systemd/system/
@@ -153,6 +237,14 @@ if [[ "${BIND_HOST}" != "${DEFAULT_HOST}" ]]; then
     sed -i "s/${DEFAULT_HOST}/${BIND_HOST}/g" /etc/systemd/system/sluice.service
 fi
 chmod 644 /etc/systemd/system/sluice.service /etc/systemd/system/sluice-gateway@.service
+if [[ "${WITH_NER}" == "1" ]]; then
+    # Bind-Adresse NICHT ersetzen: der NER-Dienst hört per Vorlage auf 127.0.0.1 und
+    # soll das auch, solange er neben dem Kern läuft — dann verlässt der Rohtext den
+    # Host nie. Ein entfernter Betrieb ist eine bewusste Einzelfall-Entscheidung
+    # (deploy/ner.env.example, Abschnitt „Entfernter Betrieb").
+    cp "${APP_DIR}/deploy/sluice-ner.service" /etc/systemd/system/
+    chmod 644 /etc/systemd/system/sluice-ner.service
+fi
 systemctl daemon-reload
 
 # Die Unit bindet an eine feste IP — fehlt sie auf dieser Maschine, scheitert der
@@ -167,8 +259,42 @@ fi
 log "Kurztest (Import als Service-User) …"
 sudo -u "${SERVICE_USER}" "${APP_DIR}/.venv/bin/python" -c "import sluice.server; print('ok')"
 
+if [[ "${WITH_NER}" == "1" ]]; then
+    # Prüft Rechte und Modell-Abhängigkeiten des NER-Users. Das Modell selbst lädt hier
+    # NICHT — `app` ist eine Factory, geladen wird erst beim Dienststart (fail-closed).
+    log "Kurztest NER (Import als ${NER_USER}) …"
+    sudo -u "${NER_USER}" "${APP_DIR}/.venv/bin/python" \
+        -c "import sluice.ner.service, gliner; print('ok')"
+fi
+
 # --- 7. Nächste Schritte -----------------------------------------------------
 GW_UNITS="$(for p in ${PROVIDERS}; do printf 'sluice-gateway@%s ' "${p}"; done)"
+
+if [[ "${WITH_NER}" == "1" ]]; then
+    NER_STEP="$(cat <<EOF
+  3. NER-Dienst konfigurieren (§7.5 — nur für Profile mit mode = "pii_ner"):
+       sudoedit ${CFG_DIR}/ner.env
+     Zwei Dinge sind dort noch OFFEN und keine Formalie (docs/NER-SERVICE.md):
+       a) SLUICE_NER_MODEL ist nicht vorentschieden — mindestens zwei Kandidaten mit
+          scripts/eval_ner.py gegeneinander evaluieren, deutsche Abdeckung ist Pflicht.
+       b) SLUICE_NER_REVISION setzen (Commit-Hash) — ohne ihn ist die
+          Anonymisierungs-Identität (§5.4) nicht belastbar.
+     CPU oder GPU erst messen, nicht raten:
+       ${APP_DIR}/.venv/bin/python ${APP_DIR}/scripts/probe_ner_hardware.py --model <repo>
+EOF
+)"
+    # Führendes \n in der Variablen statt einer eigenen Zeile in der Vorlage: sonst
+    # bliebe im Nicht-NER-Fall je eine Leerzeile stehen.
+    NER_START=$'\n       systemctl enable --now sluice-ner    # startet erst, wenn das Modell geladen ist'
+    NER_CHECK=$'\n       curl -s http://127.0.0.1:17900/v1/info   # Modellidentität für die Profilverankerung'
+    NER_FW=$'\n     NER-Port 17900 nur von der Kern-IP — über ihn geht ROHTEXT (§6).'
+else
+    NER_STEP="  3. (NER-Dienst nicht installiert — für Profile mit mode = \"pii_ner\":
+     SLUICE_WITH_NER=1 bash deploy/bootstrap.sh, siehe docs/DEPLOY.md §5.2)"
+    NER_START=""
+    NER_CHECK=""
+    NER_FW=""
+fi
 
 cat <<EOF
 
@@ -180,13 +306,14 @@ Nächste Schritte (docs/DEPLOY.md §4–§7):
   2. Je Gateway den EINEN Provider-Key eintragen (§5.1, Keys nur hier — nie im
      Kern, nie im Profil-TOML, nie im Repo):
 $(for p in ${PROVIDERS}; do printf '       sudoedit %s/gateway-%s.env\n' "${CFG_DIR}" "${p}"; done)
-  3. Gateway-URLs des Kerns prüfen (§7.3 — Keys gehören NICHT in diese Datei):
+${NER_STEP}
+  4. Gateway-URLs des Kerns prüfen (§7.3 — Keys gehören NICHT in diese Datei):
        sudoedit ${CFG_DIR}/sluice.env
-  4. Dienste starten (Gateways zuerst — der Kern ist ohne sie fail-closed):
-       systemctl enable --now ${GW_UNITS}
-       systemctl enable --now sluice
-  5. Firewall: :8000 nur aus dem Konsumenten-Netz, Gateway-Ports 17890–17893 nur
-     von der Kern-IP, ausgehend :443 nur zu den vier Provider-Hosts (§6).
-  6. Abnahme 7.1–7.5 aus docs/DEPLOY.md durchlaufen, erst danach Konsumenten
+  5. Dienste starten (Gateways zuerst — der Kern ist ohne sie fail-closed):
+       systemctl enable --now ${GW_UNITS}${NER_START}
+       systemctl enable --now sluice${NER_CHECK}
+  6. Firewall: :8000 nur aus dem Konsumenten-Netz, Gateway-Ports 17890–17893 nur
+     von der Kern-IP, ausgehend :443 nur zu den vier Provider-Hosts (§6).${NER_FW}
+  7. Abnahme 7.1–7.5 aus docs/DEPLOY.md durchlaufen, erst danach Konsumenten
      auf diese VM zeigen lassen.
 EOF

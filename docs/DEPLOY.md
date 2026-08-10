@@ -28,9 +28,12 @@ Konsumenten (Temper, Aider, Crate, …)          Provider (nur von den Gateways 
 │  systemd: sluice-gateway@<provider>  (je Provider, Ports ab 17890, §5.1)      │
 │    └─ uvicorn sluice.gateway:app  (eigener User sluice-gw-<provider>,         │
 │                                    hält NUR den Key seines Providers)         │
+│  systemd: sluice-ner.service  (nur für pii_ner, Port 17900, §5.2)             │
+│    └─ uvicorn sluice.ner.service:app  (eigener User sluice-ner, kein Egress)  │
 │  /opt/sluice          Code + venv                                             │
 │  /etc/sluice          profiles.toml (§4) + sluice.env (Gateway-URLs, §7.3)    │
 │                       + gateway-<provider>.env (je ein Provider-Key)          │
+│                       + ner.env (Modell/Revision, §5.2)                       │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -42,6 +45,36 @@ Konsumenten (Temper, Aider, Crate, …)          Provider (nur von den Gateways 
 | `/etc/systemd/system/sluice.service` | Unit (aus `deploy/`) | `root:root`, `644` |
 | `/etc/systemd/system/sluice-gateway@.service` | Template-Unit der Provider-Gateways (§5.1) | `root:root`, `644` |
 | `/etc/sluice/gateway-<provider>.env` | Host/Port + Key je Gateway (§5.1) | `root:root`, `600` |
+| `/etc/systemd/system/sluice-ner.service` | Unit des NER-Dienstes (§5.2, nur für `pii_ner`) | `root:root`, `644` |
+| `/etc/sluice/ner.env` | Modell, Revision, Präzision, Backend (§5.2) | `root:root`, `600` |
+| `/opt/sluice/models` | HF-Modell-Cache des NER-Dienstes | `sluice-ner:sluice-ner`, `700` |
+
+### 0.1 Schnellweg: `deploy/bootstrap.sh`
+
+Die Schritte 1–5 gibt es auch als Skript. Es ist idempotent — mehrfaches Ausführen ist
+der normale Update-Weg — und **überschreibt bestehende Konfiguration in `/etc/sluice`
+nie**: eine ausgefüllte `profiles.toml` oder eine Gateway-Env mit eingetragenem Key
+bleibt unangetastet.
+
+```bash
+sudo bash deploy/bootstrap.sh                      # Kern + alle vier Gateways
+sudo SLUICE_WITH_NER=1 bash deploy/bootstrap.sh    # zusätzlich der NER-Dienst (§5.2)
+```
+
+| Variable | Default | Wirkung |
+|---|---|---|
+| `SLUICE_PROVIDERS` | `anthropic openai gemini mistral` | Welche Gateways auf **dieser** Maschine laufen — beim Umzug eines Gateways dort nur den einen Provider setzen |
+| `SLUICE_BIND_HOST` | `192.168.87.40` | Bind-Adresse des Kerns; passt die *installierten* Units/Envs an, die Repo-Dateien bleiben unberührt |
+| `SLUICE_WITH_NER` | `0` (aus) | Legt User `sluice-ner`, `models/`, `ner.env` und `sluice-ner.service` an und installiert das Modell-Extra |
+| `SLUICE_NER_EXTRA` | `ner` (torch) | Alternativ `ner-onnx` / `ner-onnx-gpu` — **erst nach der Messung** wählen (§5.2) |
+
+Der NER-Dienst ist bewusst Opt-in: er zieht Modell-Gewichte und im torch-Pfad über ein
+Gigabyte Abhängigkeiten nach, die eine VM ohne `pii_ner`-Profil nichts angehen.
+
+**Das Skript startet nichts** (§4.3): ohne Profile und Keys wäre das nur ein Service, der
+alles blockiert. Die Freigabe bleibt der manuelle, letzte Schritt — es druckt am Ende die
+passende Liste. Wer verstehen will, *was* dabei passiert (oder von Hand nachziehen muss),
+liest weiter; die folgenden Abschnitte sind das manuelle Äquivalent.
 
 ---
 
@@ -49,6 +82,10 @@ Konsumenten (Temper, Aider, Crate, …)          Provider (nur von den Gateways 
 
 - VM mit Debian 12 / Ubuntu 24.04 (1 vCPU / 1 GiB RAM reichen für den Start; Sluice ist
   I/O-gebunden, nicht CPU-gebunden).
+  **Mit NER-Dienst (§5.2) gilt das nicht mehr:** dort liegt ein Modell im Speicher und
+  die Erkennung ist CPU-gebunden. Wie viel es konkret braucht, ist eine Messung, keine
+  Schätzung — `scripts/probe_ner_hardware.py` vor der Dimensionierung laufen lassen.
+  Rechne zusätzlich mit einigen GB Plattenplatz für venv (torch) und Modell-Cache.
 - Statische IP `192.168.87.40` konfiguriert.
 - Ausgehend HTTPS (443) zu den Provider-APIs erlaubt (Liste in Schritt 6).
 - Zugriff auf das Repo `github.com/BrightCGN/sluice` (Deploy-Key oder `scp` vom Arbeitsrechner).
@@ -76,6 +113,11 @@ for p in anthropic openai gemini mistral; do
   sudo useradd --system --home /opt/sluice --shell /usr/sbin/nologin sluice-gw-$p
 done
 ```
+
+Der NER-Dienst bekommt aus demselben Grund einen eigenen User — mit dem Unterschied, dass
+er als einziger Dienst **unsanitisierten Rohtext** sieht (§7.5). Er wird nur gebraucht,
+wenn mindestens ein Profil `mode = "pii_ner"` nutzt, und deshalb erst in Schritt 5.2
+angelegt.
 
 ---
 
@@ -201,6 +243,62 @@ Gateway-URL ist beim Aufruf des jeweiligen Providers ein harter Fehler (HTTP 500
 **kein** direkter Provider-Aufruf, kein stiller Fallback. systemd liest die Datei als root
 und reicht die Werte in den Prozess; der `sluice`-User selbst kann die Datei nicht lesen.
 
+### 4.3 Shared Secrets erzeugen
+
+Sluice kennt zwei **selbst erzeugte** Geheimnisse. Beide sind Shared Secrets: derselbe
+Wert steht auf beiden Seiten, und beide Seiten müssen nach einer Änderung neu starten.
+
+| Secret | Wo | Wozu |
+|---|---|---|
+| `SLUICE_GATEWAY_TOKEN` | `sluice.env` **und** jeder `gateway-<provider>.env` | Kern ↔ Gateways (§5.1) |
+| `SLUICE_NER_TOKEN` | `sluice.env` **und** `ner.env` | Kern ↔ NER-Dienst (§5.2) |
+
+```bash
+openssl rand -hex 32
+```
+
+32 Byte = 256 Bit. **Hex, nicht Base64:** der Wert geht als HTTP-Header-Wert über die
+Leitung und steht in einer Datei, die systemd als `EnvironmentFile` parst — Hex hat
+keine Sonderzeichen, die dabei zitiert oder umgedeutet werden könnten, und keine
+`=`-Auffüllung, die man beim Kopieren verliert. Führende/abschließende Leerzeichen
+werden serverseitig abgeschnitten; ein Zeilenumbruch mitten im Wert nicht.
+
+Direkt in die Dateien schreiben, ohne den Wert je über die Shell-History laufen zu lassen:
+
+```bash
+# Ein Token für alle Gateways (der Kern spricht alle mit demselben an):
+GW="$(openssl rand -hex 32)"
+printf 'SLUICE_GATEWAY_TOKEN=%s\n' "$GW" | sudo tee -a /etc/sluice/sluice.env >/dev/null
+for p in anthropic openai gemini mistral; do
+  printf 'SLUICE_GATEWAY_TOKEN=%s\n' "$GW" | sudo tee -a /etc/sluice/gateway-$p.env >/dev/null
+done
+unset GW
+
+# NER-Token (nur mit §5.2; bei entferntem Betrieb Pflicht, nicht optional):
+NER="$(openssl rand -hex 32)"
+printf 'SLUICE_NER_TOKEN=%s\n' "$NER" | sudo tee -a /etc/sluice/sluice.env >/dev/null
+printf 'SLUICE_NER_TOKEN=%s\n' "$NER" | sudo tee -a /etc/sluice/ner.env >/dev/null
+unset NER
+```
+
+Die auskommentierten `# SLUICE_…_TOKEN=`-Zeilen aus den Vorlagen danach **nicht**
+zusätzlich aktivieren: systemd nimmt bei doppelter Zuweisung in einer `EnvironmentFile`
+die **letzte**, und eine zweite Zeile im Rücken der ersten ist genau die Art Konfiguration,
+die man beim Debuggen übersieht. Kontrolle:
+
+```bash
+sudo grep -c '^SLUICE_GATEWAY_TOKEN=' /etc/sluice/sluice.env    # muss 1 sein
+```
+
+**Was hier *nicht* erzeugt wird:** die Provider-API-Keys. Die kommen aus den Konsolen von
+Anthropic, OpenAI, Google und Mistral und lassen sich nicht lokal generieren.
+
+Beide Tokens sind **optional** und ersetzen die Firewall nicht — sie authentifizieren nur.
+Was sie abdecken, ist der Fall, dass jemand *im* erlaubten Netz steht: ohne Token ist jeder
+Host, der den Port erreicht, für das Gateway ein gültiger Kern. Für den NER-Dienst wiegt
+das schwerer als für die Gateways, weil über ihn **unsanitisierter Rohtext** geht (§5.2).
+Verschlüsselung ist es nicht: bei entferntem Betrieb kommt ein Tunnel oder TLS dazu.
+
 ---
 
 ## 5. systemd-Unit installieren
@@ -257,7 +355,8 @@ Eigenschaften:
 - **Die Boundary bleibt im Kern.** Ein Gateway wird nur vom Sluice-Dispatch aufgerufen,
   *nachdem* der Verifier released hat — es sieht nie Rohtext. Deshalb: Gateways sind
   **interne Dienste**, eingehend nur vom Sluice-Kern erreichbar (Firewall), **nie** direkt
-  von Konsumenten. Optional zusätzlich Shared Secret `SLUICE_GATEWAY_TOKEN` (beide Seiten).
+  von Konsumenten. Optional zusätzlich Shared Secret `SLUICE_GATEWAY_TOKEN` auf beiden
+  Seiten — erzeugen mit `openssl rand -hex 32`, Ablauf in §4.3.
 - **Key-Isolation:** jedes Gateway hält nur den Key seines Providers; der Kern braucht
   bei dieser Variante **gar keine** Provider-Keys mehr.
 - **Umzugsfähig:** zieht ein Gateway auf einen eigenen Server, ändern sich nur
@@ -308,6 +407,84 @@ im Kern die `SLUICE_GATEWAY_<P>_URL` umstellen, `systemctl restart sluice`. Fire
 Gateway-Port eingehend nur von der Sluice-Kern-IP; ausgehend 443 nur zum eigenen
 Provider-Host (Tabelle in Schritt 6).
 
+### 5.2 NER-Dienst: eigenständiger Service (§7.5, Rev. 12)
+
+**Nur nötig, wenn mindestens ein Profil `mode = "pii_ner"` nutzt.** Ohne `pii_ner`-Profil
+diesen Schritt überspringen — `pii_regex`, `strict` und die übrigen Modi brauchen ihn nicht.
+
+Der Dienst tut genau eins: Text rein, Spans raus. Er enthält **keine** Anonymisierungslogik
+(keine Pseudonym-Zuordnung, keinen Modus-Schalter, keine Profilbindung, keine Maskierung) —
+das bleibt im Kern. Erst diese Enge macht das Modell austauschbar und erlaubt, zwei Modelle
+vergleichend zu betreiben, **ohne den Chokepoint zu duplizieren**.
+
+**Skriptweg:** `sudo SLUICE_WITH_NER=1 bash deploy/bootstrap.sh` erledigt alles bis
+einschließlich `daemon-reload` — nur das Ausfüllen von `ner.env` und das Starten bleiben
+manuell. Von Hand ist es das hier:
+
+```bash
+sudo useradd --system --home /opt/sluice --shell /usr/sbin/nologin sluice-ner
+# Der Cache muss NACH einem rekursiven chmod auf /opt/sluice angelegt werden (Schritt 3),
+# sonst räumt das a+rX die 700 wieder weg.
+sudo install -d -o sluice-ner -g sluice-ner -m 700 /opt/sluice/models
+
+# Modell-Abhängigkeiten. Sie landen zwangsläufig im selben venv (ein Interpreter für alle
+# Units) — der Kern *importiert* sie trotzdem nicht: gliner/torch werden erst in
+# sluice.ner.engine lazy geladen, und die läuft nur im NER-Prozess.
+sudo /opt/sluice/.venv/bin/pip install '/opt/sluice[ner]'   # bzw. [ner-onnx], [ner-onnx-gpu]
+sudo chown -R sluice:sluice /opt/sluice/.venv && sudo chmod -R a+rX /opt/sluice/.venv
+
+sudo install -m600 -o root -g root /opt/sluice/deploy/ner.env.example /etc/sluice/ner.env
+sudoedit /etc/sluice/ner.env       # SLUICE_NER_MODEL + SLUICE_NER_REVISION eintragen!
+sudo install -m644 /opt/sluice/deploy/sluice-ner.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now sluice-ner
+
+curl http://127.0.0.1:17900/v1/health   # {"status":"ok","model":"…"}
+curl http://127.0.0.1:17900/v1/info     # Modellidentität für die Profilverankerung
+```
+
+Zusätzlich muss der **Kern** den Dienst finden — sonst blockiert jedes `pii_ner`-Profil
+fail-closed (§5.3). Entweder global in `/etc/sluice/sluice.env`:
+
+```bash
+SLUICE_NER_URL=http://127.0.0.1:17900
+```
+
+…oder pro Profil unter `[profile."…".ner] url`. Fehlt beides, ist das kein stiller
+Fallback auf `pii_regex`, sondern ein Block. Danach `sudo systemctl restart sluice`.
+
+Im Profil verankern (`[profile."…".ner]`, siehe `docs/PROFILES.md` §6a) — `url`,
+`threshold`, `model_repo`, `model_revision`, `model_precision`. Zwei Prüfungen laufen
+dann beim ersten Kontakt mit dem Dienst, beide fail-closed (§5.4):
+
+- **Identität.** Jeder im Profil *deklarierte* Wert muss dem entsprechen, was `/v1/info`
+  meldet — sonst `NerIdentityError`. Ein Profil, das nichts deklariert, verankert auch
+  nichts und bekommt die gemeldete Identität nur zu sehen; geprüft wird nur, was dasteht.
+  Deshalb ist die Verankerung nach jedem Modell- oder Revisionswechsel nachzuziehen.
+- **Schwellwert.** `SLUICE_NER_SCORE_FLOOR` des Dienstes muss **unter** dem
+  Profil-`threshold` liegen. Filtert der Dienst schärfer vor als das Profil filtert, wäre
+  die verankerte Schwelle wirkungslos — Sluice blockiert, statt eine Recall-Zusage ohne
+  Deckung zu tragen.
+
+> **Vor dem produktiven Einsatz sind zwei Dinge zu klären**, beide in `docs/NER-SERVICE.md`
+> beschrieben und beide **noch offen**:
+> 1. **CPU oder GPU?** `python3 scripts/probe_ner_hardware.py --model <repo>` auf *dieser*
+>    Maschine. Reicht CPU, ist CPU vorzuziehen — ein Chokepoint ohne GPU-Abhängigkeit ist
+>    betrieblich robuster. Achtung: der FX-6300 hat **kein AVX2**, die CPU-Kernel fallen
+>    also auf langsamere Pfade zurück — messen statt vermuten.
+> 2. **Schwellwert kalibrieren.** `scripts/eval_ner.py` mit einem deutschsprachigen Dev-Split.
+>    Der ausgelieferte Wert ist ein recall-orientierter Startwert, **keine Kalibrierung**.
+
+**Betriebsverhalten, das man kennen muss:** Fällt der NER-Dienst aus oder reißt das
+Timeout-Budget, wird **jeder Request eines `pii_ner`-Profils blockiert** — HTTP 503,
+`sluice_mode_unavailable`. Das ist Absicht: kein stiller Rückfall auf `pii_regex`, keine
+Degradation. Ein Chokepoint, der bei Ausfall durchlässiger wird, ist kein Chokepoint.
+Entsprechend überwachen: `journalctl -u sluice-ner -f` und der Kern-Log-Eintrag
+`guard.mode_unavailable`.
+
+Der Dienst startet erst, wenn das Modell geladen ist (`TimeoutStartSec=300`) — ein Dienst,
+der `/v1/health` bejaht und erst bei `/v1/detect` scheitert, würde den Kern mitten im
+Egress-Pfad blockieren.
+
 ---
 
 ## 6. Firewall — Sluice als einziger Egress-Pfad
@@ -317,10 +494,23 @@ Provider-APIs hinaus, und hinein darf nur der Perimeter.
 
 Eingehend:
 - TCP `8000` **nur** aus dem internen Netz der Konsumenten (z. B. `192.168.87.0/24`).
+- NER-Port `17900` **nur** von der IP des Sluice-Kerns — der Dienst sieht **Rohtext**,
+  für ihn gilt dieselbe Netz-Regel wie für den Kern, nicht die lockere eines Hilfsdienstes.
+  Ausgehend braucht er **nichts** (kein Egress); nur einmalig 443 zum Modell-Download, das
+  danach wieder zu schließen ist.
 - Gateway-Ports `17890–17893` **nur** von der IP des Sluice-Kerns (solange beide auf
   derselben VM laufen, reicht localhost/VM-intern) — Konsumenten sprechen **nie** direkt
   mit einem Gateway (§5.1).
 - SSH nach eigenem Admin-Standard.
+
+
+**Auf dem NER-Host (falls der Dienst nicht auf der Kern-VM läuft, §5.2):**
+- TCP `17900` **nur** von der IP des Sluice-Kerns. Über diesen Port geht **unsanitisierter
+  Rohtext** — dieser Hop trägt mehr Personenbezug als jeder Provider-Aufruf. Zusätzlich
+  `SLUICE_NER_TOKEN` setzen (`openssl rand -hex 32`, §4.3) und den Transport
+  tunneln/verschlüsseln (WireGuard oder TLS); Sluice blockiert Klartext-HTTP zu einem
+  entfernten Host fail-closed, solange `SLUICE_NER_ALLOW_PLAINTEXT_REMOTE` nicht gesetzt
+  ist. Das Token ist Authentifizierung, **kein** Ersatz für die Verschlüsselung.
 
 Ausgehend (Ziel-Hosts der Adapter, jeweils TCP 443):
 
@@ -401,7 +591,45 @@ curl -s -X POST http://192.168.87.40:8000/v1/chat/completions \
 # → {"object":"chat.completion",…"content":"Bereit"…}
 ```
 
-Erst wenn 7.1–7.5 wie beschrieben antworten, Konsumenten auf die VM zeigen lassen.
+**7.6 NER-Dienst (nur wenn §5.2 installiert wurde):**
+
+Zuerst der Dienst selbst, direkt auf der VM — er ist von außen nicht erreichbar:
+
+```bash
+curl -s http://127.0.0.1:17900/v1/info
+# → {"model":"…","revision":"…","precision":"fp32","backend":"gliner-torch/cpu",…}
+#   revision leer? Dann ist die Anonymisierungs-Identität (§5.4) nicht belastbar.
+```
+
+Dann der Weg durch den Kern, mit einem `pii_ner`-Profil:
+
+```bash
+curl -s -X POST http://192.168.87.40:8000/v1/egress/guard \
+  -H 'content-type: application/json' \
+  -d '{"profile":"<pii-ner-profil>","purpose":"<erlaubter-purpose>",
+       "raw_text":"Bitte an Anna Schmidt, Musterweg 3, weiterleiten.",
+       "generalized_text":"Bitte an Anna Schmidt, Musterweg 3, weiterleiten."}'
+# → released=true, im sanitized_text stehen Platzhalter statt Name und Adresse
+```
+
+**Die wichtigere Probe ist der Ausfall** — sie prüft die Zusage, dass nicht degradiert
+wird. NER-Dienst stoppen, denselben Request wiederholen:
+
+```bash
+sudo systemctl stop sluice-ner
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  http://192.168.87.40:8000/v1/egress/guard -H 'content-type: application/json' \
+  -d '{"profile":"<pii-ner-profil>","purpose":"<erlaubter-purpose>",
+       "raw_text":"x","generalized_text":"x"}'
+# → 503   (sluice_mode_unavailable — NICHT 200 mit Regex-Ergebnis)
+sudo systemctl start sluice-ner
+```
+
+Kommt hier **200**, ist irgendwo doch ein Fallback eingebaut — das wäre ein Chokepoint,
+der bei Ausfall durchlässiger wird, und damit keiner. Nicht in Betrieb nehmen.
+
+Erst wenn 7.1–7.5 (und ggf. 7.6) wie beschrieben antworten, Konsumenten auf die VM
+zeigen lassen.
 
 ---
 
@@ -413,7 +641,13 @@ released/blocked und Verifier-Findings):
 ```bash
 journalctl -u sluice -f
 journalctl -u sluice --since today | grep "released=False"   # heutige Blocks
+journalctl -u sluice-ner -f                                  # nur mit §5.2
 ```
+
+Bei laufendem NER-Dienst zusätzlich auf `guard.mode_unavailable` im Kern-Log achten: das
+ist der Eintrag, mit dem ein `pii_ner`-Profil blockiert, weil der Dienst nicht antwortet.
+Er gehört auf dieselbe Aufmerksamkeitsstufe wie ein Gateway-Ausfall — anders als dort
+fällt er aber nicht auf, weil der Konsument nur ein 503 sieht.
 
 **Update einspielen:**
 
@@ -425,9 +659,27 @@ sudo systemctl restart sluice
 curl -s http://192.168.87.40:8000/v1/health   # Abnahme 7.1 wiederholen
 ```
 
-**Backup:** Nur `/etc/sluice/` sichern (Profile + Keys). `/opt/sluice` ist aus dem Repo
-reproduzierbar; der Service selbst hält keinen persistenten Zustand (Mappings sind
-in-memory mit TTL, §8 — ein Neustart verwirft sie absichtlich).
+Alternativ und äquivalent: `sudo bash deploy/bootstrap.sh` aus dem aktualisierten
+Checkout (idempotent, fasst `/etc/sluice` nicht an — §0.1). Läuft der NER-Dienst mit,
+dann `SLUICE_WITH_NER=1` mitgeben, damit auch dessen Extra nachgezogen wird, und ihn
+mitneustarten:
+
+```bash
+sudo /opt/sluice/.venv/bin/pip install '/opt/sluice[ner]'
+# Einzeln und in dieser Reihenfolge: bei `restart a b` garantiert systemd keine
+# Reihenfolge, und der Kern blockiert jedes pii_ner-Profil, solange der Dienst weg ist.
+sudo systemctl restart sluice-ner
+sudo systemctl restart sluice
+```
+
+Ein Modell- oder Revisionswechsel ist **kein** reines Update: die Verankerung in den
+Profilen (`model_repo`/`model_revision`/`model_precision`) muss mitgezogen werden, sonst
+blockiert die Identitätsprüfung (§5.2) — absichtlich.
+
+**Backup:** Nur `/etc/sluice/` sichern (Profile + Keys + `ner.env`). `/opt/sluice` ist aus
+dem Repo reproduzierbar, der Modell-Cache unter `/opt/sluice/models` aus dem Netz; der
+Service selbst hält keinen persistenten Zustand (Mappings sind in-memory mit TTL, §8 —
+ein Neustart verwirft sie absichtlich).
 
 **Neuen Konsumenten anschließen:** Profil in `profiles.toml` ergänzen (braucht er einen
 neuen Provider: Gateway-Instanz aktivieren + URL in `sluice.env`, §5.1),
@@ -447,7 +699,13 @@ neuen Provider: Gateway-Instanz aktivieren + URL in `sluice.env`, §5.1),
 | 500 `sluice_provider_config` | `SLUICE_GATEWAY_<P>_URL` fehlt (Rev. 7) / Provider-Name unbekannt / Key im Gateway fehlt | `sluice.env` (URLs) bzw. `gateway-<p>.env` (Key) prüfen, betroffenen Service neu starten |
 | 502 `sluice_provider_upstream` | Provider-API down oder Key ungültig | `journalctl` zeigt den HTTP-Status des Providers; Key/Status-Seite des Providers prüfen |
 | 502 mit `gateway …` in der reason | Gateway-Service down / URL falsch / Token-Mismatch | `systemctl status sluice-gateway@<p>`; `SLUICE_GATEWAY_<P>_URL` und `SLUICE_GATEWAY_TOKEN` auf beiden Seiten prüfen |
-| Service startet nicht | Python < 3.11, venv kaputt, Port belegt | `journalctl -u sluice -n 50`; `ss -tlnp | grep 8000` |
+| 401 `gateway_unauthorized` bzw. 401 vom NER-Dienst | Token nur auf **einer** Seite gesetzt, Wert abweichend, oder doppelt zugewiesen | Beide Dateien vergleichen (§4.3); `grep -c '^SLUICE_…_TOKEN=' <datei>` muss je `1` ergeben. Nach jeder Änderung **beide** Seiten neu starten — der Wert wird beim Start gelesen |
+| Service startet nicht | Python < 3.11, venv kaputt, Port belegt | `journalctl -u sluice -n 50`; `ss -tlnp \| grep 8000` |
+| 503 `sluice_mode_unavailable` | NER-Dienst down, Timeout gerissen, oder `SLUICE_NER_URL`/`[profile.…ner] url` fehlt (§5.2) | `systemctl status sluice-ner`, Kern-Log `guard.mode_unavailable`. **Kein Sluice-Fehler im engeren Sinn — so ist es gedacht:** kein stiller Rückfall auf `pii_regex` |
+| 503, obwohl `sluice-ner` läuft | Modellidentität weicht ab (`NerIdentityError`) oder `SLUICE_NER_SCORE_FLOOR` > Profil-`threshold` | Reason lesen — sie nennt Feld, verankerten und gemeldeten Wert. `curl 127.0.0.1:17900/v1/info` gegen den `[profile.….ner]`-Block halten |
+| `sluice-ner` startet nicht | `SLUICE_NER_MODEL` leer, Modell-Download fehlgeschlagen, `gliner` fehlt | `journalctl -u sluice-ner -n 50`. Der Dienst lädt das Modell **beim Start** (fail-closed) — er kommt bewusst gar nicht erst hoch, statt später im Egress-Pfad zu scheitern |
+| `sluice-ner` bricht mit `TimeoutStartSec` ab | Erststart lädt die Gewichte aus dem Netz | Einmalig 443 für den NER-Host öffnen (§6), Dienst starten, danach wieder schließen — der Cache unter `/opt/sluice/models` bleibt |
+| `pii_ner` blockt viel mehr als erwartet | `threshold` ist ein recall-orientierter Startwert, **keine Kalibrierung** | `scripts/eval_ner.py` mit deutschsprachigem Dev-Split fahren, dann den Profil-`threshold` setzen (`docs/NER-SERVICE.md`) |
 
 **Grundsatz bei jeder Störung:** Sluice ist fail-closed. Jeder Fehlerpfad blockiert, statt
 Rohtext durchzulassen — eine „hängende" Integration ist immer ein Konfigurations- oder

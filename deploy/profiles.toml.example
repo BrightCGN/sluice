@@ -47,3 +47,45 @@ allowed_purposes    = ["playlist_curation"]
 provider_allowlist  = ["anthropic", "gemini"]
 detector_profile    = "media"
 dictionary_terms    = ["<haushaltsname>", "<strasse hausnr>"]  # echte Namens-/Adressliste auf der VM
+
+
+# --- Rev. 12: zweistufige PII-Erkennung (§5.3) ----------------------------------------
+# `pii_regex` = nur die Regex-Stufe: strukturierte Identifikatoren mit Prüfsummen
+# (IBAN Mod-97, Steuer-ID, SVNR, KVNR, Luhn) plus E-Mail/IP/MAC/KFZ/Telefon. Dort, wo
+# eine Prüfsumme greift, ist die Erkennung präzise — kein Modell nötig.
+[profile."crate-regex"]
+mode                = "pii_regex"
+egress_enabled      = true
+allowed_purposes    = ["playlist_curation"]
+provider_allowlist  = ["anthropic", "gemini"]
+detector_profile    = "pii_de"
+
+# `pii_ner` = dieselbe Regex-Stufe PLUS Modellerkennung; das Ergebnis ist die
+# Vereinigungsmenge. Das Modell übernimmt nur, was Regex prinzipiell nicht kann:
+# Personennamen, Organisationen, Freitext-Adressen, Ortsangaben. Bei Überlappung
+# gewinnt die Regex-Erkennung (sie kennt den validierten Typ).
+#
+# FAIL-CLOSED: ist der NER-Dienst weg oder reißt das Timeout, wird BLOCKIERT (503,
+# sluice_mode_unavailable) — kein stiller Rückfall auf pii_regex.
+[profile."prismclaw-ner"]
+mode                = "pii_ner"
+egress_enabled      = true
+allowed_purposes    = ["external_escalation", "chat"]
+provider_allowlist  = ["anthropic", "gemini"]
+detector_profile    = "pii_de"
+  [profile."prismclaw-ner".ner]
+  url             = "http://127.0.0.1:17900"
+  # RECALL-optimiert, NICHT F1-optimiert: Übermaskierung ist ein Kostenfaktor, ein
+  # übersehener Span ein Datenleck. Wert auf einem separaten Dev-Split kalibrieren
+  # (scripts/eval_ner.py), nie auf dem Testset. Fehlt er, gilt der unkalibrierte
+  # Default und die Identität weist threshold_calibrated=false aus.
+  threshold       = 0.30
+  labels          = ["person", "organization", "address", "location"]
+  # Timeout zählt als Ausfall ⇒ blockiert.
+  timeout_seconds = 5.0
+  # Teil der versionierten Anonymisierungs-Identität (§5.4). Weicht der Dienst davon
+  # ab, blockiert Sluice fail-closed — ein stiller Modellwechsel ist ausgeschlossen.
+  model_repo      = "fastino/gliner2-privacy-filter-PII-multi"
+  model_revision  = ""            # Commit-Hash eintragen, sonst ist die Identität wertlos
+  model_precision = "fp32"
+

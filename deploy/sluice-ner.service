@@ -1,0 +1,90 @@
+# Sluice NER-Dienst — eigenständiger Service für die Modellerkennung
+# (Spec §7.5, Rev. 12). Ein Prozess, ein Modell:
+#   systemctl enable --now sluice-ner
+#
+# Der Dienst tut GENAU EINS: Text rein, Spans raus. Er enthält keine
+# Anonymisierungslogik — keine Pseudonym-Zuordnung, keinen Modus-Schalter, keine
+# Profilbindung, keine Maskierung. Das alles bleibt im Sluice-Kern. Erst diese Enge
+# macht das Modell austauschbar und erlaubt, zwei Modelle vergleichend zu betreiben,
+# ohne den Chokepoint zu duplizieren.
+#
+# Eigener System-User wie bei den Provider-Gateways (Rev. 8) — User-Isolation
+# zusätzlich zur Prozess-Isolation. Anlegen:
+#   useradd --system --home /opt/sluice --shell /usr/sbin/nologin sluice-ner
+#
+# INTERNER Dienst: eingehend nur vom Sluice-Kern erlauben (Firewall), optional
+# zusätzlich Shared Secret SLUICE_NER_TOKEN (beide Seiten). Er sieht Rohtext —
+# deshalb gilt für ihn dieselbe Netz-Regel wie für den Kern, nicht die lockere
+# eines Hilfsdienstes.
+#
+# Port-Konvention: 17900 (die Gateways liegen ab 17890).
+# Konfiguration: /etc/sluice/ner.env (chmod 600, Eigentümer root).
+#
+# Zwei Besonderheiten gegenüber den Gateway-Units:
+#  - ProtectHome=read-only statt true: der HF-Modell-Cache liegt unter
+#    ${HF_HOME}. Zeigt HF_HOME nach /opt/sluice/models, kann ProtectHome=true bleiben.
+#  - Kein MemoryDenyWriteExecute: ONNX-Runtime und PyTorch nutzen JIT-Codepfade.
+#
+# Prüfen:
+#   curl http://127.0.0.1:17900/v1/health  → {"status":"ok","model":"..."}
+#   curl http://127.0.0.1:17900/v1/info    → Modellidentität für die Profilverankerung
+
+[Unit]
+Description=Sluice NER-Dienst — Entitätserkennung für den pii_ner-Modus (/v1)
+Documentation=https://github.com/BrightCGN/sluice
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=sluice-ner
+Group=sluice-ner
+WorkingDirectory=/opt/sluice
+
+# Modell, Revision, Präzision, Backend + Host/Port (+ optional SLUICE_NER_TOKEN).
+EnvironmentFile=/etc/sluice/ner.env
+
+# Der Dienst lädt das Modell BEIM START (fail-closed): kommt er nicht hoch, blockiert
+# Sluice sauber, statt erst mitten im Egress-Pfad zu scheitern.
+ExecStart=/opt/sluice/.venv/bin/uvicorn --factory sluice.ner.service:app --host ${SLUICE_HOST} --port ${SLUICE_PORT}
+Restart=on-failure
+RestartSec=5
+# Modell laden dauert; kein verfrühter Abbruch.
+TimeoutStartSec=300
+
+# --- Prozess-Härtung: wie die Gateway-Unit, mit den zwei Abweichungen oben ------------
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/sluice/models
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+# GPU-Betrieb (nur falls die Messung ihn rechtfertigt, siehe docs/NER-SERVICE.md):
+# PrivateDevices=true blockiert /dev/nvidia*, deshalb dann auskommentieren und
+# stattdessen die Geräte gezielt freigeben:
+# PrivateDevices=false
+# DeviceAllow=/dev/nvidiactl rw
+# DeviceAllow=/dev/nvidia0 rw
+# DeviceAllow=/dev/nvidia-uvm rw
+PrivateDevices=true
+
+[Install]
+WantedBy=multi-user.target
