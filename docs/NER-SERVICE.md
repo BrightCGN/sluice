@@ -92,9 +92,10 @@ Bridge, konservativ abgerundet für KVM-Overhead.
 #### Bewertung: **CPU auf der VM trägt nicht**
 
 Das sind Sekunden **pro Request**, im *synchronen* Egress-Pfad, **vor** dem Provider-Aufruf.
-Selbst der günstigste Fall — Kurztext, kleineres Modell — liegt bei knapp einer Sekunde.
-Der empfohlene Startpunkt `fastino/…` (~205M statt ~278M) bringt grob Faktor 0,74, also
-~850 ms / ~2.600 ms / ~7.000 ms: dieselbe Größenordnung, dieselbe Antwort.
+Selbst der günstigste Fall — Kurztext — liegt bei knapp einer Sekunde. Ein kleineres Modell
+verschiebt das proportional zur Parameterzahl, also um einen Faktor und nicht um eine
+Größenordnung: dieselbe Antwort. (Der zuvor hier als Ausweg genannte `fastino/…`-Checkpoint
+ist ohnehin nicht ladbar, siehe §4.)
 
 Zusätzlich: die VM hat **1 vCPU**, den sich Sluice-Kern, vier Gateway-Prozesse und der
 NER-Dienst teilen. Während einer Inferenz ist der Kern belegt — es warten nicht nur der
@@ -128,7 +129,7 @@ python3 scripts/probe_ner_hardware.py
 
 # Wert 2 — Latenz bei 200/1000/4000 Zeichen, Median über 5 Läufe nach 2 Warmläufen:
 python3 scripts/probe_ner_hardware.py \
-    --model fastino/gliner2-privacy-filter-PII-multi \
+    --model urchade/gliner_multi_pii-v1 \
     --json docs/messwerte-ner.json
 ```
 
@@ -163,10 +164,14 @@ deutsche Sprachabdeckung ist zwingend.
 
 | Modell | Anmerkung |
 |---|---|
-| `fastino/gliner2-privacy-filter-PII-multi` | GLiNER2-PII, ~205M Parameter, 42 Entitätstypen, 7 Sprachen. Bester Recall unter den GLiNER-Detektoren. **Empfohlener Startpunkt.** |
+| `urchade/gliner_multi_pii-v1` | Referenzimplementierung (mDeBERTa-v3-base, ~278M), 6 Sprachen inkl. Deutsch. Lädt mit dem `gliner`-Paket. **Empfohlener Startpunkt.** |
 | `knowledgator/gliner-pii-base-v1.0` | 60+ Kategorien, quantisierungsbewusst trainiert, fertige ONNX-Exporte in FP16 und UINT8 — der bequemste ONNX-Pfad. |
-| `urchade/gliner_multi_pii-v1` | Referenzimplementierung, 6 Sprachen inkl. Deutsch. |
 | `VAGOsolutions/SauerkrautLM-GLiNER` | DE/EN/IT/FR/ES gemeinsam trainiert, deutscher Benchmark eigens kuratiert. Allzweck-NER, **nicht** PII-spezialisiert — als Kontrast gegen die PII-Modelle nützlich. |
+| ~~`fastino/gliner2-privacy-filter-PII-multi`~~ | **Nicht verwendbar** — am 2026-08-10 auf der VM verifiziert. Es ist ein **GLiNER2**-Checkpoint: im Snapshot liegen `config.json` und `encoder_config/`, aber keine `gliner_config.json`, und `GLiNER.from_pretrained` bricht mit `No config file found` ab. `gliner` 0.2.28 exportiert nur `GLiNER`/`GLiNERConfig`, keine GLiNER2-Klasse. Es bräuchte die separate `gliner2`-Bibliothek und damit einen zweiten Engine-Adapter. Stand hier zuvor als „empfohlener Startpunkt" — das war aus der Modellbeschreibung übernommen, nicht geprüft. |
+
+**Lehre daraus, für jeden weiteren Kandidaten:** vor jeder Empfehlung einmal
+`GLiNER.from_pretrained(<repo>)` laufen lassen. Parametergröße und Entitätstypen aus der
+Modellkarte sagen nichts darüber, ob der Checkpoint zum installierten Paket passt.
 
 GLiNER nimmt die Entitätstypen **zur Laufzeit** als Label-Liste entgegen. Deshalb steht die
 Liste in der Sluice-Konfiguration (`[profile.X.ner] labels`) und ist Teil der versionierten
@@ -213,7 +218,7 @@ Split zu tunen und zu berichten überschätzt die Güte systematisch.
 python3 scripts/eval_ner.py \
     --dev  docs/eval/de-dev.jsonl \
     --test docs/eval/de-test.jsonl \
-    --model fastino/gliner2-privacy-filter-PII-multi \
+    --model urchade/gliner_multi_pii-v1 \
     --model urchade/gliner_multi_pii-v1 \
     --target-recall 0.98 \
     --json docs/eval/ergebnis.json
@@ -306,7 +311,7 @@ curl 'http://127.0.0.1:17800/v1/anonymization-identity?profile=prismclaw-ner'
   "detector_profile": "pii_de",
   "dictionary_digest": "none",
   "ner": {
-    "model_repo": "fastino/gliner2-privacy-filter-PII-multi",
+    "model_repo": "urchade/gliner_multi_pii-v1",
     "model_revision": "…",
     "model_precision": "fp32",
     "threshold": 0.30,

@@ -359,7 +359,7 @@ detector_profile    = "pii_de"                # deutsche PII mit Prüfsummen (§
   threshold         = 0.30                    # RECALL-optimiert, nicht F1 (§5.4)
   labels            = ["person", "organization", "address", "location"]
   timeout_seconds   = 5.0                     # Timeout zählt als Ausfall ⇒ blockiert
-  model_repo        = "fastino/gliner2-privacy-filter-PII-multi"
+  model_repo        = "urchade/gliner_multi_pii-v1"
   model_revision    = "<commit-hash>"         # ohne ihn ist die Identität wertlos (§5.4)
   model_precision   = "fp32"
 

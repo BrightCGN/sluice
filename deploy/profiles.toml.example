@@ -85,7 +85,7 @@ detector_profile    = "pii_de"
   timeout_seconds = 5.0
   # Teil der versionierten Anonymisierungs-Identität (§5.4). Weicht der Dienst davon
   # ab, blockiert Sluice fail-closed — ein stiller Modellwechsel ist ausgeschlossen.
-  model_repo      = "fastino/gliner2-privacy-filter-PII-multi"
+  model_repo      = "urchade/gliner_multi_pii-v1"
   model_revision  = ""            # Commit-Hash eintragen, sonst ist die Identität wertlos
   model_precision = "fp32"
 

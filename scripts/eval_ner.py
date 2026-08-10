@@ -21,7 +21,7 @@ Datenformat (JSONL, eine Zeile je Dokument):
 
 Aufruf:
     python3 scripts/eval_ner.py --dev dev.jsonl --test test.jsonl \\
-        --model fastino/gliner2-privacy-filter-PII-multi \\
+        --model urchade/gliner_multi_pii-v1 \\
         --model urchade/gliner_multi_pii-v1 \\
         --target-recall 0.98 --json eval-ergebnis.json
 

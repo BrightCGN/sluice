@@ -150,7 +150,7 @@ detector_profile = "pii_de"
   url             = "http://127.0.0.1:17900"
   threshold       = 0.30
   timeout_seconds = 5.0
-  model_repo      = "fastino/gliner2-privacy-filter-PII-multi"
+  model_repo      = "urchade/gliner_multi_pii-v1"
   model_revision  = "<commit-hash>"
   model_precision = "fp32"
 ```

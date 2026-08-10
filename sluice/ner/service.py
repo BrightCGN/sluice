@@ -23,7 +23,7 @@ nie direkt von Konsumenten erreichbar, eigener System-User `sluice-ner`, optiona
 Shared Secret `SLUICE_NER_TOKEN` (Header `X-Sluice-Ner-Token`).
 
 Start (systemd `deploy/sluice-ner.service`, Port 17900):
-    SLUICE_NER_MODEL=fastino/gliner2-privacy-filter-PII-multi \
+    SLUICE_NER_MODEL=urchade/gliner_multi_pii-v1 \
     uvicorn --factory sluice.ner.service:app --port 17900
 """
 

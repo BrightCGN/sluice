@@ -188,7 +188,7 @@ def build_engine_from_env() -> NerEngine:
     if not model_id:
         raise RuntimeError(
             "NER-Dienst ohne Modell: SLUICE_NER_MODEL setzen (z. B. "
-            "fastino/gliner2-privacy-filter-PII-multi). Kandidaten und Auswahl: "
+            "urchade/gliner_multi_pii-v1). Kandidaten und Auswahl: "
             "docs/NER-SERVICE.md."
         )
     return GlinerEngine(

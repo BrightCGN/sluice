@@ -23,7 +23,7 @@ from sluice.ner import NerConfig, NerIdentityError, NerUnavailableError
 from sluice.ner.client import NerClient
 from sluice.policy import Profile, parse_profiles
 
-MODEL = "fastino/gliner2-privacy-filter-PII-multi"
+MODEL = "urchade/gliner_multi_pii-v1"
 REVISION = "a1b2c3d4e5f6"
 
 # „Richard Cochius" ist für die Regex-Stufe unsichtbar (freier Name ohne feste Form) —

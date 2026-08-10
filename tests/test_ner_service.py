@@ -24,7 +24,7 @@ class FakeEngine:
 
     def info(self) -> ServiceInfo:
         return ServiceInfo(
-            model="fastino/gliner2-privacy-filter-PII-multi",
+            model="urchade/gliner_multi_pii-v1",
             revision="a1b2c3d4e5f6",
             precision="fp32",
             labels=("person", "organization", "address", "location"),
@@ -60,7 +60,7 @@ async def test_info_liefert_modellidentitaet() -> None:
     async with client() as http:
         for path in ("/v1/info", "/info"):
             body = (await http.get(path)).json()
-            assert body["model"] == "fastino/gliner2-privacy-filter-PII-multi"
+            assert body["model"] == "urchade/gliner_multi_pii-v1"
             assert body["revision"] == "a1b2c3d4e5f6"
             assert body["precision"] == "fp32"
             assert body["batch_size"] == 1
