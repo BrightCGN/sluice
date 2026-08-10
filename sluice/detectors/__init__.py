@@ -45,12 +45,14 @@ from sluice.detectors.code import PROFILE as _CODE  # noqa: E402
 from sluice.detectors.financial import PROFILE as _FINANCIAL  # noqa: E402
 from sluice.detectors.infra import PROFILE as _INFRA  # noqa: E402
 from sluice.detectors.media import PROFILE as _MEDIA  # noqa: E402
+from sluice.detectors.pii_de import PROFILE as _PII_DE  # noqa: E402
 
 _PROFILES: dict[str, DetectorProfile] = {
     _INFRA.name: _INFRA,
     _CODE.name: _CODE,
     _MEDIA.name: _MEDIA,
     _FINANCIAL.name: _FINANCIAL,
+    _PII_DE.name: _PII_DE,  # deutsche PII mit Prüfsummen (Rev. 12, §5.3)
 }
 
 
