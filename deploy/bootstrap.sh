@@ -47,6 +47,13 @@ NER_USER="sluice-ner"
 # NACH der Messung wählen — scripts/probe_ner_hardware.py, docs/NER-SERVICE.md.
 NER_EXTRA="${SLUICE_NER_EXTRA:-ner}"
 
+# torch von PyPI zieht auf Linux die CUDA-Variante mit der kompletten nvidia-Laufzeit —
+# mehrere GB, auch wenn nie eine GPU im Spiel ist. Weil `cpu` der Auslieferungs-Default
+# ist (ein Chokepoint ohne GPU-Abhängigkeit ist betrieblich robuster), installiert das
+# Skript torch aus dem CPU-Index. Wer wirklich CUDA will, setzt SLUICE_NER_TORCH_CPU=0.
+TORCH_CPU="${SLUICE_NER_TORCH_CPU:-1}"
+TORCH_CPU_INDEX="https://download.pytorch.org/whl/cpu"
+
 log()  { printf '\033[1;34m[bootstrap]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[bootstrap]\033[0m %s\n' "$*" >&2; }
 
@@ -177,8 +184,36 @@ normalize_app_perms
 # nicht: gliner/torch werden erst in sluice.ner.engine lazy geladen, und die läuft nur
 # im NER-Prozess. Der Kern-Code bleibt frei von Modell-Abhängigkeiten (§7.5).
 if [[ "${WITH_NER}" == "1" ]]; then
+    # Vor dem großen Install prüfen, nicht mittendrin auf ENOSPC laufen: eine halb
+    # installierte Umgebung ist schlimmer als eine gar nicht installierte, weil pip die
+    # Konsolen-Skripte schon neu geschrieben haben kann.
+    case "${NER_EXTRA}" in
+        ner) need_mib=$(( TORCH_CPU == 1 ? 4096 : 9216 )) ;;
+        *)   need_mib=2560 ;;
+    esac
+    avail_mib=$(( $(df -Pk "${APP_DIR}" | awk 'NR==2 {print $4}') / 1024 ))
+    if (( avail_mib < need_mib )); then
+        echo "Zu wenig Plattenplatz für '[${NER_EXTRA}]': ${avail_mib} MiB frei, ~${need_mib} MiB nötig." >&2
+        echo "  (venv + Modell-Cache unter ${APP_DIR}; das Modell kommt später noch dazu.)" >&2
+        if [[ "${NER_EXTRA}" == "ner" && "${TORCH_CPU}" != "1" ]]; then
+            echo "  Ohne SLUICE_NER_TORCH_CPU=0 wäre der Bedarf deutlich kleiner — die" >&2
+            echo "  CUDA-Variante von torch bringt die komplette nvidia-Laufzeit mit." >&2
+        fi
+        exit 1
+    fi
+
     install -d -o "${NER_USER}" -g "${NER_USER}" -m 700 "${APP_DIR}/models"
-    log "Installiere NER-Extra '[${NER_EXTRA}]' — das dauert (torch/ONNX sind groß) …"
+
+    # torch zuerst und allein aus dem CPU-Index. Nicht per --extra-index-url zusammen mit
+    # dem Rest: der CPU-Index führt nur torch & Co., und eine gemischte Auflösung würde
+    # unvorhersehbar mal hier, mal dort landen. Ist torch danach erfüllt, installiert der
+    # Extra-Schritt nur noch den Rest.
+    if [[ "${NER_EXTRA}" == "ner" && "${TORCH_CPU}" == "1" ]]; then
+        log "Installiere torch (CPU-Wheels, ohne CUDA-Laufzeit) …"
+        "${APP_DIR}/.venv/bin/pip" install --quiet --index-url "${TORCH_CPU_INDEX}" torch
+    fi
+
+    log "Installiere NER-Extra '[${NER_EXTRA}]' — das dauert …"
     "${APP_DIR}/.venv/bin/pip" install --quiet "${APP_DIR}[${NER_EXTRA}]"
     normalize_app_perms
 fi

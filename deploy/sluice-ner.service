@@ -33,6 +33,11 @@
 Description=Sluice NER-Dienst — Entitätserkennung für den pii_ner-Modus (/v1)
 Documentation=https://github.com/BrightCGN/sluice
 After=network-online.target
+# Liegt /opt/sluice auf einem eigenen Dateisystem, darf der Dienst erst nach dessen
+# Einhängen starten. Ohne das startet er gegen ein leeres Verzeichnis und scheitert mit
+# 203/EXEC — einem Fehlerbild, das nach fehlenden Rechten aussieht und keine sind.
+# Liegt das Verzeichnis auf /, löst die Zeile sich auf -.mount auf und kostet nichts.
+RequiresMountsFor=/opt/sluice
 Wants=network-online.target
 
 [Service]
