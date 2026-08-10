@@ -86,6 +86,17 @@ Verifier (§5) komponiert. Eingebaute Modi (initiale Menge, erweiterbar):
 - **`pseudonymizing`** — `reversible=True`, **explizites Opt-in** (Profil `mode`/Request
   `mode: "reversible"`). forward + reverse + `stream_reverser` (Holdback) + `reverse_obj` +
   Mapping-Lebenszyklus. Herkunft: PrismClaws `prismclaw.anon`.
+- **`pii_regex`** (Rev. 12) — `reversible=False`. Regex-Stufe allein: `pii_de`-Muster mit
+  Prüfziffernverfahren, span-basiert redigiert (`sluice/spans.py`).
+- **`pii_ner`** (Rev. 12) — `reversible=False`. **`pii_regex` plus Modellerkennung, additiv:**
+  beide Stufen laufen, das Ergebnis ist die **Vereinigungsmenge**; bei Überlappung gewinnt
+  **Regex** (kennt den validierten Typ). Als *Unterklasse* von `PiiRegexMode` gebaut, damit die
+  Regex-Stufe strukturell nicht wegfallen kann. Braucht den NER-Dienst (§7.5) — **ohne ihn wird
+  blockiert, nie degradiert** (503 `sluice_mode_unavailable`).
+
+**Namensregel-Ausnahme (Rev. 12):** Modus-Namen benennen sonst Absicht, nicht Engine — für
+`pii_regex`/`pii_ner` ist die Rev.-9-Regel bewusst aufgehoben (Spec §3), weil die
+*Zweistufigkeit selbst* die Zusage ist. **Für neue Modi gilt die Regel weiter.**
 
 Reversibel ist die schwächere Zusage (Mapping-Tabelle bleibt personenbezogen) und führt Zustand
 ein — daher **nie geerbt, immer bewusst deklariert**. Ebenso `passthrough`/fail-open: nur nach
@@ -105,13 +116,23 @@ sluice/
   policy.py              # Profil-Schema + check_egress_allowed
   verifier.py            # deterministischer Riegel; Muster aus Detektor-Profilen
   audit.py               # egress_log, append-only
+  spans.py               # Span-Mechanik: Offsets, Vereinigung, Redaktion (Rev. 12, §5.3)
+  identity.py            # Anonymisierungs-Identität: Modell + Schwellwert (Rev. 12, §5.4)
+  errors.py              # ModeUnavailableError — Blatt-Modul ohne Importe
   modes/
     __init__.py          # Mode (Protocol) + Registry (select_mode/register_mode)
     strict.py            # auto-redigierend, Auslieferungs-Default (§4.3)
     passthrough.py       # Identität, kein Verifier (§2.1)
     generalizing.py      # forward-only
     pseudonymizing.py    # forward + reverse + stream_reverser + reverse_obj + scope/TTL
-  detectors/             # Muster-Sets: infra, code, media, financial
+    pii_regex.py         # Regex-Stufe, span-basiert (Rev. 12)
+    pii_ner.py           # Regex ∪ NER, Unterklasse von pii_regex (Rev. 12)
+  ner/
+    __init__.py          # NerConfig, Fehler (NerError erbt ModeUnavailableError), Labels
+    client.py            # Kern → NER-Dienst: fail-closed, Timeout, Inhalts-Hash-Cache
+    engine.py            # GLiNER-Backends (torch/ONNX), Determinismus fixiert
+    service.py           # eigenständiger NER-Dienst, Port 17900 (Rev. 12, §7.5)
+  detectors/             # Muster-Sets: infra, code, media, financial, pii_de
   dispatch.py            # guarded_completion: Guard → Provider-Adapter → (reverse)
   server.py              # Kern-Service: /v1/egress/guard + /v1/chat/completions
   gateway.py             # eigenständiger Gateway-Service, ein Prozess pro Provider (Rev. 6, Ports ab 17890)
@@ -125,6 +146,10 @@ sluice/
     remote.py            # Kern → Gateway-Service (SLUICE_GATEWAY_<P>_URL, Rev. 6)
 docs/
   SLUICE-BOUNDARY-SPEC.md  # Wahrheitsquelle
+  NER-SERVICE.md           # NER-Betrieb, Messung, Evaluation (Rev. 12)
+scripts/
+  probe_ner_hardware.py    # erst messen, dann entscheiden (CPU/GPU)
+  eval_ner.py              # Schwellwert-Kalibrierung, Metriken je Entitätstyp
 tests/                   # kein Netz; httpx.MockTransport wo HTTP nötig
 ```
 
@@ -160,8 +185,16 @@ tests/                   # kein Netz; httpx.MockTransport wo HTTP nötig
 - **Nur an diesem Repo arbeiten.** Temper/Crate/PrismClaw höchstens **read-only** als Referenz
   fürs Interface-Design ansehen — **nie** im selben Auftrag an ihnen operieren. Konsumenten-
   Migration ist eine spätere, getrennte Phase.
-- **Innerhalb eines Modus, der den Verifier komponiert (`strict`/`full`/`pseudonymizing`), nie
-  lockern** — auch nicht „weil reversibel". Ob ein Modus ihn überhaupt komponiert, ist Modus-
+- **Kein zweiter Pfad an Sluice vorbei** — auch nicht für lokale Modelle, bei denen „ja
+  nichts rausgeht". Die Chokepoint-Eigenschaft ist strukturell (§1). Wer ein lokales Modell
+  anbinden will, baut einen Provider-Adapter + Gateway wie für jeden Cloud-Provider, nie
+  einen Direktpfad am Guard vorbei.
+- **NER-Ausfall blockiert — immer.** Kein stiller Rückfall von `pii_ner` auf `pii_regex`, keine
+  graceful degradation, kein Überspringen bei fehlender URL. Ein Chokepoint, der bei Ausfall
+  durchlässiger wird, ist kein Chokepoint. Ebenso: **kein dynamisches Batching** (Determinismus,
+  §5.4) und **kein generatives LLM** für die Erkennung.
+- **Innerhalb eines Modus, der den Verifier komponiert (`strict`/`pii_regex`/`pii_ner`/
+  `generalizing`/`pseudonymizing`), nie lockern** — auch nicht „weil reversibel". Ob ein Modus ihn überhaupt komponiert, ist Modus-
   Entscheidung (`passthrough` tut es nicht); der *Auslieferungs-Default bleibt `strict`* mit
   Verifier fail-closed (Rev. 9, §4.3/§5).
 - **Versionierte Schnittstelle ab Tag 1** (`/v1/…`) — Sluice ist eine Abhängigkeit mit Vertrag;

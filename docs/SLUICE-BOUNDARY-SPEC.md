@@ -1,6 +1,33 @@
 # Sluice — Boundary- & Contract-Spec (v1)
 
-> **Stand:** 2026-07-13. **Revision 11:** `allowed_modes` wird **fail-closed für fail-open-Modi**
+> **Stand:** 2026-08-07. **Revision 12:** **zweistufige PII-Erkennung** — die Modi
+> `pii_regex` und `pii_regex`+NER `pii_ner` (§3, §5.3), der eigenständige **NER-Dienst**
+> (§7.5) und die **Anonymisierungs-Identität** (§5.4). `pii_ner` ist **additiv, nicht
+> alternativ**: beide Stufen laufen, das Ergebnis ist die **Vereinigungsmenge** der Spans;
+> bei Überlappung hat die **Regex-Erkennung Vorrang**, weil nur sie den per Prüfsumme
+> *validierten* Typ kennt. Das Modell ersetzt die Regex-Stufe nie — es übernimmt
+> ausschließlich, was Regex prinzipiell nicht kann (Namen, Organisationen, Freitext-
+> Adressen, Ortsangaben). **Fail-closed auf der Verfügbarkeits-Achse:** ist der NER-Dienst
+> weg oder reißt das Timeout, wird **blockiert** (503 `sluice_mode_unavailable`) — kein
+> stiller Rückfall auf `pii_regex`, keine Degradation. Der Guard greift dabei generisch am
+> Fehlertyp (`ModeUnavailableError`), nicht am Modus-Namen. **Der Schwellwert wird auf
+> Recall optimiert, nicht auf F1** (§5.4) und ist ein *versionierter Konfigurationswert*,
+> keine Code-Konstante. Additiv und rückwärtskompatibel: bestehende Profile und Modi
+> bleiben unverändert.
+>
+> **Namensregel aus Rev. 9 aufgehoben (bewusste Vertragsentscheidung).** Rev. 9 verbot
+> engine-benennende Modus-Namen (`pii_regex`/`pii_ner`) zugunsten von Abstufungen
+> (`basic`/`full`). Rev. 12 hebt das für diese zwei Modi auf: die Namen benennen die
+> Engine, und das ist hier gewollt — die *Zweistufigkeit selbst* ist die Zusage an den
+> Konsumenten, nicht bloß ein Implementierungsweg dahin. Wer `pii_ner` wählt, wählt
+> ausdrücklich „Regex **und** Modell", mit allem, was daran hängt: einer externen
+> Abhängigkeit, einem Recall-Schwellwert, einer Modellidentität im Audit. Ein neutraler
+> Name wie `full` würde genau das verbergen. Der eingetauschte Preis ist real und wird
+> hier festgehalten: ein Engine-Tausch *innerhalb* der NER-Stufe (anderes Modell, andere
+> Runtime) ist weiterhin frei — der Modell-Name steht in der Konfiguration, nicht im
+> Modus-Namen —, aber ein Wechsel der *Erkennungsart* wäre ein neuer Modus, kein stiller
+> Austausch hinter demselben Namen. Für künftige Modi gilt die Rev.-9-Regel weiter.
+> **Revision 11:** `allowed_modes` wird **fail-closed für fail-open-Modi**
 > (§4.1/§4.3). Die leere Allowlist erlaubt weiterhin alle **verifizierenden** Modi
 > (`strict`/`generalizing`/`pseudonymizing`) — aber ein **Modus ohne Verifier** (`enforce_verifier=false`,
 > heute nur `passthrough`, §2.1) ist **nur** wirksam, wenn das Profil ihn **ausdrücklich** in
@@ -272,13 +299,28 @@ bleiben **außerhalb** des Modus und für alle Modi gleich.
 - **`pseudonymizing`** — `reversible=True`. Volle Implementierung aller vier Methoden; trägt den
   Mapping-Lebenszyklus (§8). Herkunft: PrismClaws `anon` (`forward_messages`, `reverse_text`,
   `stream_reverser` mit Holdback, `reverse_obj`).
-- *(erweiterbar)* ein regex-`basic` / regex+NER-`full`-Abstufung sowie **format-preserving**
-  (Beträge/IBANs strukturerhaltend) sind je ein weiterer registrierter Modus — **ohne** Guard,
-  Profil-Gate oder Audit anzufassen. *(post-v1)*
+- **`pii_regex`** *(Rev. 12)* — `reversible=False`. Die **Regex-Stufe allein**: strukturierte
+  Identifikatoren über das Detektor-Profil (`pii_de`), span-basiert redigiert. Wo ein
+  Prüfziffernverfahren greift (IBAN Mod-97, Steuer-ID, SVNR, KVNR, Luhn), ist die Erkennung
+  präzise — eine bestandene Prüfsumme *ist* die Typbestätigung. Verifier fail-closed (§5.3).
+- **`pii_ner`** *(Rev. 12)* — `reversible=False`. **`pii_regex` plus Modellerkennung**, additiv:
+  beide Stufen laufen, das Ergebnis ist die **Vereinigungsmenge**. Implementiert als
+  *Unterklasse* von `pii_regex`, damit die Regex-Stufe strukturell nicht wegfallen kann.
+  Braucht den NER-Dienst (§7.5); ohne ihn wird **blockiert**, nie degradiert (§5.3).
+- *(erweiterbar)* **format-preserving** (Beträge/IBANs strukturerhaltend) ist je ein weiterer
+  registrierter Modus — **ohne** Guard, Profil-Gate oder Audit anzufassen. *(post-v1)*
 
-Modus-Namen benennen **Absicht/Zusage**, nicht die Engine: nicht `pii_regex`/`pii_ner` (das
-verdrahtet die Implementierung in den Vertrag und bricht beim Engine-Tausch, §5.1/§7.4), sondern
-Abstufungen wie `basic`/`full`/`strict`. Regex-vs-NER bleibt austauschbare Engine dahinter.
+Modus-Namen benennen grundsätzlich **Absicht/Zusage**, nicht die Engine — ein Engine-Name im
+Vertrag bricht beim Engine-Tausch (§5.1/§7.4). Für neue Modi gilt das weiter: Abstufungen wie
+`basic`/`full`/`strict` statt Verfahrensnamen.
+
+**Ausnahme `pii_regex`/`pii_ner` (Rev. 12, bewusst).** Hier *ist* die Zweistufigkeit die Zusage,
+nicht bloß der Weg dorthin: wer `pii_ner` wählt, wählt ausdrücklich „Regex **und** Modell" — und
+damit eine externe Abhängigkeit, einen Recall-Schwellwert und eine Modellidentität im Audit. Ein
+neutraler Name wie `full` würde genau diese Konsequenzen verbergen. Der Preis ist real: ein
+Wechsel der *Erkennungsart* wäre ein neuer Modus statt eines stillen Austauschs hinter demselben
+Namen. Frei bleibt der Tausch *innerhalb* der NER-Stufe — welches Modell, welche Runtime, welche
+Präzision steht in der Konfiguration (§5.4), nicht im Modus-Namen.
 
 ---
 
@@ -305,6 +347,21 @@ detector_profile    = "code"
   scope             = "session"               # Mapping-Scope (§8)
   ttl_seconds       = 3600
   storage           = "memory"                # memory | persistent(post-v1)
+
+[profile."prismclaw-ner"]
+mode                = "pii_ner"               # Regex ∪ NER (Rev. 12, §5.3)
+egress_enabled      = true
+allowed_purposes    = ["external_escalation"]
+provider_allowlist  = ["claude"]
+detector_profile    = "pii_de"                # deutsche PII mit Prüfsummen (§5.1)
+  [profile."prismclaw-ner".ner]
+  url               = "http://127.0.0.1:17900"  # fehlt sie ⇒ fail-closed, nie Bypass (§5.3)
+  threshold         = 0.30                    # RECALL-optimiert, nicht F1 (§5.4)
+  labels            = ["person", "organization", "address", "location"]
+  timeout_seconds   = 5.0                     # Timeout zählt als Ausfall ⇒ blockiert
+  model_repo        = "fastino/gliner2-privacy-filter-PII-multi"
+  model_revision    = "<commit-hash>"         # ohne ihn ist die Identität wertlos (§5.4)
+  model_precision   = "fp32"
 
 [profile."crate"]
 mode                = "strict"                # auto-redigiert das rohe Operator-Thema (Rev. 9)
@@ -395,6 +452,7 @@ Die *Engine* (Regex/NER-Runner) ist geteilt; die *Muster* kommen aus dem `detect
 | `code` | wie `infra` + interne Package-/Repo-Namen, Pfade, Env-Var-Werte |
 | `media` | (leichter) Pfade, NAS-Hosts; kaum PII |
 | `financial` | IBAN/BIC, Kontonummern, Beträge?*, Gegenparteien-Namen — **strenger justiert** |
+| `pii_de` *(Rev. 12)* | deutsche PII **mit Prüfziffernverfahren**: IBAN (Mod-97), Steuer-ID, SVNR, KVNR, Kreditkarte (Luhn) · E-Mail, IPv4/IPv6, MAC, KFZ-Kennzeichen, Telefon (deutsche Vorwahlstruktur) · Secret/Token. Die Regex-Stufe von `pii_regex`/`pii_ner` (§5.3) |
 
 \* Beim Bank-Tool widersprechen sich Sanitisierung und Lösbarkeit maximal (Beträge *sind* der
 Nutzen). Auflösung: Rechnen bleibt **lokal**; nur die abstrahierte Strategiefrage (Kategorien/
@@ -425,6 +483,98 @@ dictionary_terms = ["Richard", "Musterstraße 12", "Acme GmbH"]
 ### 5.2 Genericity-Check (Re-Identifikation durch Kombination) *(post-v1)*
 Reifeversion: nicht nur „enthält Identifier?", sondern „generisch genug, um aus vielen
 Umgebungen zu stammen?". Justierbar pro Profil (bank-tool strenger als temper).
+
+### 5.3 Zweistufige PII-Erkennung: Regex ∪ NER (Rev. 12)
+
+Die Arbeitsteilung folgt aus einer Asymmetrie, nicht aus Bequemlichkeit:
+
+| Stufe | Zuständig für | Warum genau dort |
+|---|---|---|
+| **Regex** (`detectors/pii_de.py`) | IBAN (Mod-97), Steuer-ID, SVNR, KVNR, Kreditkarte (Luhn), E-Mail, IPv4/IPv6, MAC, KFZ-Kennzeichen, Telefon (deutsche Vorwahlstruktur) | Feste, prüfbare Form. Eine bestandene Prüfsumme *ist* die Bestätigung des Typs — kein NER-Modell erreicht das. |
+| **NER** (`ner/`, §7.5) | Personennamen, Organisationen, Freitext-Adressen, Ortsangaben, kontextabhängige Fälle | Kein festes Format. Genau das, was Regex prinzipiell nicht kann — und was `dictionary_terms` (§5.1.1) nur für *bekannte* Terme literal abdeckt. |
+
+**Vereinigungsmenge, nicht Ersetzung.** `pii_ner` fährt beide Stufen; das Ergebnis ist die
+Vereinigung der Spans. Die gemeinsame Koordinate ist der **Zeichen**-Offset (`sluice/spans.py`)
+— nie der Token-Offset, denn Sluice redigiert Zeichen, und Token-Grenzen sind Engine-Detail.
+
+**Regex hat Vorrang bei Überlappung.** Ein NER-Span, der einen Regex-Span berührt, fällt ganz
+weg. Der Vorrang ist kategorisch, nicht längenabhängig: nur die Regex-Stufe kennt den
+*validierten* Typ (`[IBAN]`), das Modell nur eine Label-Vermutung. Ein breiter Modell-Span darf
+den typisierten Platzhalter weder überschreiben noch zerschneiden. Innerhalb der NER-Stufe
+gewinnt der längere Span (mehr maskiert = mehr Recall).
+
+**Fail-closed auf der Verfügbarkeits-Achse.** Ist der NER-Dienst nicht erreichbar, reißt das
+Timeout-Budget oder weicht die gemeldete Modellidentität ab, wird die Anfrage **blockiert**.
+Kein stiller Rückfall auf `pii_regex`, keine Degradation — ein Chokepoint, der bei Ausfall
+durchlässiger wird, ist keiner. Der Fehler geht als *eigener Typ* an den Aufrufer und ins Audit:
+
+| Lage | HTTP | `error.type` |
+|---|---|---|
+| Policy-Ablehnung (Profil, Allowlist, Verifier) | 403 | `sluice_blocked` |
+| Modus-Ausfall (NER weg, Timeout, Identitätsabweichung) | **503** | **`sluice_mode_unavailable`** |
+
+Die Trennung ist betrieblich nötig: eine Ablehnung ist endgültig, ein Ausfall ist ein Vorfall —
+er darf im 403-Rauschen nicht untergehen. Der Guard greift generisch am Fehlertyp
+(`ModeUnavailableError`), nicht am Namen `pii_ner`; jeder künftige Modus mit externer
+Abhängigkeit erbt das Verhalten. Fehlende Dienst-URL wird genauso behandelt wie ein Ausfall —
+dieselbe Härte wie die Gateway-Pflicht (Rev. 7).
+
+**Kein generatives LLM für die Erkennung.** Nichtdeterministisch, an Span-Grenzen
+halluzinationsanfällig, latenzseitig untauglich für den synchronen Egress-Pfad.
+
+### 5.4 Anonymisierungs-Identität & Determinismus (Rev. 12)
+
+**Recall vor Precision.** Der Konfidenz-Schwellwert wird auf **Recall optimiert, nicht auf F1**.
+Das weicht bewusst von der üblichen Modellkalibrierung ab, und zwar aus einem Grund, der für
+eine Egress-Boundary spezifisch ist: F1 gewichtet einen zusätzlichen False Positive genauso wie
+einen übersehenen Span. Diese Gewichtung stimmt hier nicht — Übermaskierung kostet Nutzen, ein
+übersehener Span kostet die Zusage. Der Schwellwert ist deshalb ein **versionierter
+Konfigurationswert** im Profil (`[profile.X.ner] threshold`), **keine Code-Konstante**. Ein
+Profil ohne eigenen Wert erbt einen unkalibrierten Default und wird in der Identität als
+`threshold_calibrated: false` ausgewiesen — sichtbar, statt still.
+
+**Determinismus.** Verifizierbare Anonymisierung setzt voraus, dass identische Eingaben
+identische Spans liefern. Getragen von vier Maßnahmen:
+
+- **Batchgröße fixiert (immer 1).** Kein dynamisches Batching: sonst ändert sich die
+  Reduktionsreihenfolge in Gleitkommaoperationen mit der Auslastung, und Grenzfälle am
+  Schwellwert kippen zwischen sonst identischen Läufen. Der Dienst weist abweichende
+  Batchgrößen ab (400) — die Ablehnung *ist* die Durchsetzung.
+- **Ein Intra-Op-Thread.** Gleicher Grund: die Thread-Anzahl ändert die Reduktionsreihenfolge.
+- **Numerische Präzision fixiert und ausgewiesen** (`/v1/info` → Identität). Ein Wechsel
+  fp32→fp16 verschiebt Scores und damit Grenzfälle; er darf nicht unbemerkt passieren.
+- **Totale Sortierordnung** der Spans — zwei gleich lange Spans an derselben Stelle wären
+  sonst nur zufällig geordnet.
+
+Der **Inhalts-Hash-Cache** macht Wiederholungen bitgleich und senkt die Latenz. Über
+Prozessneustarts hinweg trägt er die Zusage **nicht** — das tun die vier Punkte oben. Sein
+Schlüssel enthält Schwellwert, Labels und Modellidentität; sonst überlebte ein alter Eintrag
+eine Konfigurationsänderung und hebelte genau die Identität aus, die er stabilisieren soll.
+
+**Die Anonymisierungs-Identität** beantwortet *„womit genau wurde dieser Text anonymisiert?"* —
+die Voraussetzung dafür, dass „anonymisiert" im Audit mehr ist als eine Behauptung. Sie ist
+**im Profil verankert**, analog zum Modus-Schalter selbst (§4): dieselbe Stelle, die entscheidet
+*ob* sanitisiert wird, legt fest *wie genau*. Sie umfasst Modus, Detektor-Profil, den Digest des
+Profil-Wörterbuchs sowie — bei NER-Modi — **Modell-Repo und Revision-Hash**, geladene Präzision,
+Schwellwert, Label-Liste und Batchgröße. Abrufbar über `GET /v1/anonymization-identity?profile=…`.
+
+Die Wörterbuch-Terme gehen nur als **Digest** ein: sie sind personenbezogen (Rev. 10) und dürfen
+nie ins Audit, ihre *Änderung* muss aber sichtbar sein. `digest()` ist der vergleichbare
+Fingerabdruck — ändert sich Schwellwert oder Modell-Revision, ändert er sich, und ein stiller
+Modellwechsel wird sichtbar statt unbemerkt die Zusage zu verschieben. Meldet der Dienst über
+`/v1/info` eine **andere** Identität als das Profil verankert, wird fail-closed blockiert: sonst
+wäre der protokollierte Wert eine Lüge. Ohne festgenagelte `model_revision` ist die Identität
+wertlos — das Repo könnte sich unter derselben Kennung ändern.
+
+**Labels sind Konfiguration.** GLiNER nimmt die Entitätstypen zur Laufzeit als Label-Liste
+entgegen; sie steht deshalb im Profil und ist Teil der Identität, nicht im Dienst verdrahtet.
+Ein Modelltausch braucht damit keinen Code-Eingriff.
+
+**Modellauswahl und Kalibrierung** sind Betriebsarbeit, nicht Spec-Inhalt: mindestens zwei
+Kandidaten gegeneinander, deutsche Sprachabdeckung zwingend, Span-Level-Metriken getrennt nach
+Entitätstyp, Kalibrierung auf einem separaten Dev-Split. Verfahren, Kandidaten und der Stand der
+offenen Messungen: `docs/NER-SERVICE.md`, Skripte `scripts/probe_ner_hardware.py` und
+`scripts/eval_ner.py`.
 
 ---
 
@@ -561,6 +711,54 @@ Die Allowlist (§4.1) begrenzt pro Profil, welche erlaubt sind.
 Sluice ist ab jetzt eine **Abhängigkeit mit Vertrag** — ein Breaking Change trifft alle
 Konsumenten gleichzeitig. `Accept: application/vnd.sluice.v1+json` bzw. `/v1/…`-Pfad-Präfix
 und eine Kompatibilitätszusage von Beginn an, sonst wird jedes Update zur Drei-Repo-Migration.
+
+### 7.5 NER-Dienst (Revision 12)
+
+Ein **eigenständiger Prozess mit bewusst schmaler Schnittstelle**. Er tut genau eins: Text rein,
+Spans raus.
+
+```
+POST /v1/detect   (= /detect)   {"text": "…", "labels": ["person", …]}
+                              → {"spans": [{"start": int, "end": int, "label": str, "score": float}]}
+GET  /v1/health   (= /health)   Readiness
+GET  /v1/info     (= /info)     {model, revision, precision, labels, backend, score_floor, batch_size}
+```
+
+`start`/`end` sind **Zeichen**-Offsets, nicht Token-Offsets. Versionierte Pfade sind der Vertrag
+(§7.4); die unversionierten bestehen als Alias.
+
+**Nicht im NER-Dienst:** Pseudonym-Zuordnung, Modus-Schalter, Profilbindung, Maskierungslogik,
+Schwellwert-Anwendung. Alles davon bleibt in Sluice. Die Enge ist kein Selbstzweck, sondern die
+Bedingung dafür, dass das Modell **austauschbar** bleibt und **zwei Modelle vergleichend**
+betrieben werden können, **ohne den Chokepoint zu duplizieren**. Jede Anonymisierungslogik, die
+hierher wandert, wäre ein zweiter Riegel neben Sluice.
+
+Die Schwellwert-Anwendung liegt bewusst in Sluice, nicht im Dienst: der Schwellwert ist Teil der
+Anonymisierungs-Identität (§5.4). Der Dienst filtert nur grob über `score_floor` vor — und dieser
+Wert **muss unter jedem Profil-Schwellwert liegen**, sonst wäre die verankerte Schwelle
+wirkungslos. Sluice prüft das fail-closed.
+
+`/v1/info` ist der Grund, warum die Modellidentität überhaupt verankerbar ist: Sluice übernimmt
+Modellname, Revision und geladene Präzision daraus ins Profil und blockiert bei Abweichung (§5.4).
+
+**Betrieb** wie die Provider-Gateways (Rev. 6/8): interner Dienst hinter der Boundary, eigener
+System-User `sluice-ner`, nie direkt von Konsumenten erreichbar, optionales Shared Secret
+`SLUICE_NER_TOKEN`. Port 17900 (Gateways ab 17890). Er sieht **Rohtext** — für ihn gilt dieselbe
+Netz-Regel wie für den Kern, nicht die lockere eines Hilfsdienstes.
+
+**Transport-Schranke.** Der NER-Dienst ist die einzige Komponente, die *unsanitisierten* Text
+sieht. Dieser Hop trägt damit **mehr** Personenbezug als der spätere Provider-Aufruf — und der
+geht über TLS. Läuft der Dienst deshalb auf einem anderen Host, ist eine `http://`-URL nur nach
+ausdrücklichem Opt-in (`SLUICE_NER_ALLOW_PLAINTEXT_REMOTE`) erlaubt; Loopback und `https://`
+sind frei. Bewusst ein Opt-in und kein Verbot: einen WireGuard-Tunnel unter dem `http://` kann
+Sluice nicht sehen und würde einen korrekt abgesicherten Aufbau sonst fälschlich blockieren.
+Ein Shared Secret authentifiziert, **ersetzt aber keine Verschlüsselung**. Das Modell wird **beim Start**
+geladen: ein Dienst, der `/v1/health` bejaht und erst bei `/v1/detect` scheitert, würde Sluice
+mitten im Egress-Pfad blockieren.
+
+Der Sluice-**Kern** braucht weder `gliner` noch `torch` — er spricht den Dienst über HTTP an. Das
+hält den Chokepoint selbst frei von Modell-Abhängigkeiten (Extras: `ner`, `ner-onnx`,
+`ner-onnx-gpu`).
 
 ---
 
