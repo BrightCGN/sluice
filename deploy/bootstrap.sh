@@ -112,6 +112,29 @@ if [[ "${REPO_DIR}" != "${APP_DIR}" ]]; then
 fi
 
 # --- 4. venv + Installation --------------------------------------------------
+# Ein venv ist NICHT verschiebbar: die Konsolen-Skripte in bin/ tragen den absoluten
+# Interpreterpfad in ihrer Shebang-Zeile. Wird ein venv kopiert oder von einer anderen
+# Maschine gersynct, zeigen sie weiter auf das alte Verzeichnis — und der Dienst scheitert
+# mit „Permission denied" auf das SKRIPT, obwohl dessen Rechte stimmen und der Interpreter
+# gemeint ist. (Zeigt der tote Pfad unter ein fremdes Home mit 0700, wird aus dem
+# eigentlich fälligen ENOENT sogar ein EACCES — die Meldung führt dann doppelt in die Irre.)
+# Deshalb: nicht nur auf Existenz prüfen, sondern auf Zugehörigkeit zu DIESEM Verzeichnis.
+venv_is_sane() {
+    local py="${APP_DIR}/.venv/bin/python"
+    [[ -x "${py}" ]] || return 1
+    "${py}" -c 'import sys' 2>/dev/null || return 1
+    # pip stellvertretend für alle Konsolen-Skripte: sein Shebang muss hierher zeigen.
+    [[ -f "${APP_DIR}/.venv/bin/pip" ]] || return 1
+    head -1 "${APP_DIR}/.venv/bin/pip" | grep -q "^#!${APP_DIR}/\.venv/" || return 1
+}
+
+if [[ -d "${APP_DIR}/.venv" ]] && ! venv_is_sane; then
+    warn "Das venv unter ${APP_DIR}/.venv gehört nicht hierher (fremde Shebang-Pfade
+  oder defekter Interpreter) — vermutlich von einer anderen Maschine kopiert. Ein venv
+  ist nicht verschiebbar; ich baue es neu. Installierte Extras werden dabei mit
+  neu installiert."
+    rm -rf "${APP_DIR}/.venv"
+fi
 if [[ ! -d "${APP_DIR}/.venv" ]]; then
     log "Erzeuge venv …"
     python3 -m venv "${APP_DIR}/.venv"
@@ -271,6 +294,23 @@ fi
 # Importtest als Service-User: findet kaputte venvs/Rechte vor dem ersten Start.
 log "Kurztest (Import als Service-User) …"
 sudo -u "${SERVICE_USER}" "${APP_DIR}/.venv/bin/python" -c "import sluice.server; print('ok')"
+
+# Und jetzt das, was systemd wirklich tut: das Konsolen-Skript AUSFÜHREN. Der Importtest
+# oben läuft über den Interpreter und übergeht damit die Shebang-Zeile — genau die Stelle,
+# an der ein von woanders kopiertes venv scheitert. Ein `test -x` genügt hier ebenfalls
+# nicht: es prüft nur die Bits des Skripts, nie den Interpreter dahinter.
+log "Kurztest (uvicorn ausführen als Service-User) …"
+for u in "${SERVICE_USER}" $(for p in ${PROVIDERS}; do echo "sluice-gw-${p}"; done) ${NER_USERS}; do
+    if ! sudo -u "${u}" "${APP_DIR}/.venv/bin/uvicorn" --version >/dev/null 2>&1; then
+        warn "User '${u}' kann ${APP_DIR}/.venv/bin/uvicorn nicht ausführen."
+        warn "  Shebang: $(head -1 "${APP_DIR}/.venv/bin/uvicorn" 2>/dev/null || echo '?')"
+        warn "  Zeigt der auf ein anderes Verzeichnis als ${APP_DIR}/.venv, ist das venv"
+        warn "  von einer anderen Maschine — dann '${APP_DIR}/.venv' löschen und dieses"
+        warn "  Skript erneut laufen lassen. Sonst: namei -l auf den Shebang-Pfad."
+        exit 1
+    fi
+done
+log "uvicorn ist für alle Service-User ausführbar."
 
 if [[ "${WITH_NER}" == "1" ]]; then
     # Prüft Rechte und Modell-Abhängigkeiten des NER-Users. Das Modell selbst lädt hier
