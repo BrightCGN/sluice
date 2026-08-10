@@ -17,6 +17,23 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
+# NER-Dienst (§7.5, Rev. 12) — NUR auf dem Host des NER-Dienstes installieren.
+# Der Sluice-Kern spricht ihn über HTTP an und braucht weder gliner noch torch;
+# das hält den Chokepoint selbst frei von Modell-Abhängigkeiten.
+ner = [
+    "gliner>=0.2.13",
+    "torch>=2.0",
+]
+# ONNX-Runtime-Pfad: der Ausweg, wenn PyTorch keine Pascal-Kernel (sm_61) mitbringt.
+# Erst nach der Messung wählen — siehe scripts/probe_ner_hardware.py und docs/NER-SERVICE.md.
+ner-onnx = [
+    "gliner>=0.2.13",
+    "onnxruntime>=1.17",
+]
+ner-onnx-gpu = [
+    "gliner>=0.2.13",
+    "onnxruntime-gpu>=1.17",
+]
 
 [build-system]
 requires = ["hatchling"]
