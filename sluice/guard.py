@@ -24,6 +24,7 @@ import structlog
 
 from sluice.audit import AuditLog
 from sluice.audit import egress_log as _default_audit
+from sluice.errors import ModeUnavailableError
 from sluice.policy import (
     Profile,
     check_egress_allowed,
@@ -42,6 +43,11 @@ class EgressOutcome:
     sanitized_text: str | None
     reason: str
     sanitized_messages: list[dict[str, Any]] | None = None
+    # Rev. 12: unterscheidet die *Art* der Blockade. None = normale Policy-/Verifier-
+    # Entscheidung; `mode_unavailable` = ein Modus konnte seine Zusage nicht einlösen
+    # (z. B. NER-Dienst weg, §5.3). Beides blockiert — aber ein Ausfall darf beim
+    # Aufrufer nicht als Policy-Ablehnung ankommen und im Rauschen untergehen.
+    error_type: str | None = None
 
 
 async def guarded_egress(
@@ -67,7 +73,9 @@ async def guarded_egress(
     audit_log = audit if audit is not None else _default_audit
     mode_name = profile.mode if profile is not None else None
 
-    def _blocked(reason: str, findings: tuple[str, ...] = ()) -> EgressOutcome:
+    def _blocked(
+        reason: str, findings: tuple[str, ...] = (), *, error_type: str | None = None
+    ) -> EgressOutcome:
         audit_log.append(
             profile=profile.name if profile is not None else None,
             purpose=purpose,
@@ -79,7 +87,9 @@ async def guarded_egress(
             provider_target=provider_target,
             verifier_findings=findings,
         )
-        return EgressOutcome(released=False, sanitized_text=None, reason=reason)
+        return EgressOutcome(
+            released=False, sanitized_text=None, reason=reason, error_type=error_type
+        )
 
     # 1. Profil-Gate (Invariante 1) — greift *vor* der Modus-Auswahl.
     decision = check_egress_allowed(profile, purpose)
@@ -107,7 +117,21 @@ async def guarded_egress(
     if not mode_decision.allowed:
         return _blocked(mode_decision.reason)
 
-    sanitized: Sanitized = await chosen.forward(payload, scope)
+    # Fail-closed auf der Verfügbarkeits-Achse (Rev. 12, §5.3): kann ein Modus seine
+    # Zusage gerade nicht einlösen — NER-Dienst weg, Timeout gerissen, Modellidentität
+    # abweichend —, wird **blockiert**. Kein Rückfall auf eine schwächere Stufe: ein
+    # Chokepoint, der bei Ausfall durchlässiger wird, ist kein Chokepoint. Der Guard
+    # greift dabei generisch am Fehlertyp (§3), er kennt NER nicht namentlich.
+    try:
+        sanitized: Sanitized = await chosen.forward(payload, scope)
+    except ModeUnavailableError as exc:
+        log.error(
+            "guard.mode_unavailable", profile=profile.name, mode=chosen.name, error=str(exc)
+        )
+        return _blocked(
+            f"Modus '{chosen.name}' nicht verfügbar (fail-closed, §5.3): {exc}",
+            error_type="mode_unavailable",
+        )
 
     texts = sanitized.texts()
     if not texts:

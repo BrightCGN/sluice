@@ -19,6 +19,12 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from sluice.ner import DEFAULT_LABELS, DEFAULT_THRESHOLD, DEFAULT_TIMEOUT_SECONDS, NerConfig
+
+if TYPE_CHECKING:
+    from sluice.identity import AnonymizationIdentity
 
 DEFAULT_MODE = "strict"  # sicherer Auslieferungs-Default (Rev. 9, §4.3)
 VALID_STORAGE = ("memory",)  # persistent ist post-v1 (Spec §8/§10)
@@ -46,11 +52,27 @@ class Profile:
     detector_profile: str = "infra"
     dictionary_terms: tuple[str, ...] = ()  # konsument-deklarierte Literale (§5.1, Rev. 10)
     reversible: ReversibleConfig | None = None
+    ner: NerConfig | None = None  # NER-Stufe + Anonymisierungs-Identität (§5.3/§5.4, Rev. 12)
 
     @property
     def strategy(self) -> str:
         """Rückwärtskompatibler Lese-Alias auf `mode` (Rev. 9)."""
         return self.mode
+
+    def anonymization_identity(self) -> "AnonymizationIdentity":
+        """Die profilverankerte Anonymisierungs-Identität (§5.4, Rev. 12).
+
+        Verankert an derselben Stelle wie der Modus-Schalter selbst: das Profil
+        entscheidet *ob* sanitisiert wird und legt damit auch fest *womit genau*.
+        """
+        from sluice.identity import build_identity  # lazy: vermeidet Import-Zyklus
+
+        return build_identity(
+            mode=self.mode,
+            detector_profile=self.detector_profile,
+            dictionary_terms=self.dictionary_terms,
+            ner_config=self.ner,
+        )
 
 
 @dataclass(frozen=True)
@@ -170,8 +192,51 @@ def parse_profiles(toml_text: str) -> dict[str, Profile]:
             detector_profile=raw.get("detector_profile", "infra"),
             dictionary_terms=tuple(str(t) for t in raw.get("dictionary_terms", ())),
             reversible=reversible,
+            ner=_parse_ner(name, raw),
         )
     return profiles
+
+
+def _parse_ner(profile_name: str, raw: dict) -> NerConfig | None:
+    """Parst `[profile.<name>.ner]` (§4/§5.4, Rev. 12).
+
+    Wird **immer** geparst, wenn der Block existiert — nicht nur bei `mode = "pii_ner"`.
+    Ein Request darf den Modus wechseln (§7.2), und eine erst dann fehlende NER-Config
+    wäre ein Konfigurationsfehler mitten im Egress-Pfad statt beim Laden.
+
+    Der `threshold` ist der Punkt, an dem dieses Schema von der üblichen Kalibrierung
+    abweicht: er wird auf **Recall** optimiert, nicht auf F1 (§5.4). Deshalb ist er ein
+    versionierter Konfigurationswert und keine Code-Konstante — und deshalb hält
+    `threshold_declared` fest, ob das Profil ihn wirklich gesetzt hat. Ein geerbter
+    Default heißt: unkalibriert, und die Anonymisierungs-Identität weist das aus.
+    """
+    block = raw.get("ner")
+    if not isinstance(block, dict):
+        return None
+
+    threshold = block.get("threshold")
+    if threshold is not None and not 0.0 <= float(threshold) <= 1.0:
+        raise ValueError(
+            f"Profil '{profile_name}': ner.threshold muss in [0,1] liegen, ist {threshold}."
+        )
+    timeout = float(block.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS))
+    if timeout <= 0:
+        raise ValueError(
+            f"Profil '{profile_name}': ner.timeout_seconds muss > 0 sein (Timeout zählt "
+            f"als Ausfall, §5.3)."
+        )
+
+    return NerConfig(
+        url=block.get("url"),
+        threshold=float(threshold) if threshold is not None else DEFAULT_THRESHOLD,
+        labels=tuple(str(x) for x in block.get("labels", DEFAULT_LABELS)),
+        timeout_seconds=timeout,
+        model_repo=str(block.get("model_repo", "")),
+        model_revision=str(block.get("model_revision", "")),
+        model_precision=str(block.get("model_precision", "")),
+        cache_size=int(block.get("cache_size", 1024)),
+        threshold_declared=threshold is not None,
+    )
 
 
 def load_profiles(path: str | Path) -> dict[str, Profile]:

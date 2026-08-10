@@ -10,6 +10,10 @@ tauscht nur das Modus-Objekt (Spec §3).
 - `PseudonymizingMode` — reversible=True, explizites Opt-in per Profil oder
   Request-`mode: "reversible"` (§7.2): die schwächere Zusage (Mapping-Tabelle bleibt
   personenbezogen) und führt Zustand ein — nie geerbt, immer bewusst deklariert.
+- `PiiRegexMode` (Rev. 12) — reversible=False. Regex-Stufe allein, span-basiert (§5.3).
+- `PiiNerMode` (Rev. 12) — reversible=False. `pii_regex` **plus** Modellerkennung,
+  additiv; Unterklasse von `PiiRegexMode`, damit die Regex-Stufe nicht wegfallen kann.
+  Braucht den NER-Dienst (§7.5) — ohne ihn blockiert der Guard fail-closed (§5.3).
 
 Ein späteres Verfahren (format-preserving, post-v1) ist einfach ein weiterer Modus
 hinter demselben Schalter — ohne Guard/Verifier/Audit anzufassen.
@@ -121,7 +125,20 @@ _instances: dict[str, Mode] = {}
 
 
 def register_mode(name: str, factory: ModeFactory) -> None:
-    """Registriert einen Modus unter `name` (öffentlicher Erweiterungspunkt, §3)."""
+    """Registriert einen Modus unter `name` (öffentlicher Erweiterungspunkt, §3).
+
+    Lädt zuerst die Built-ins. Ohne das hinge das Ergebnis an der Aufrufreihenfolge: wer
+    sich registriert, *bevor* irgendetwas die Built-ins angefasst hat, würde von der
+    späteren Lazy-Ladung überschrieben — der Erweiterungspunkt wäre je nach Importpfad
+    still wirkungslos. Eine Registrierung überschreibt einen gleichnamigen Built-in
+    bewusst (das ist der Sinn: einen Modus ersetzbar machen).
+    """
+    _ensure_builtins()
+    _MODE_FACTORIES[name] = factory
+
+
+def _register_builtin(name: str, factory: ModeFactory) -> None:
+    """Interne Registrierung ohne `_ensure_builtins` — sonst Rekursion beim Laden."""
     _MODE_FACTORIES[name] = factory
 
 
@@ -129,24 +146,44 @@ def _ensure_builtins() -> None:
     global _builtins_loaded
     if _builtins_loaded:
         return
+    # VOR den Registrierungen setzen: `_register_builtin` ruft `_ensure_builtins` zwar
+    # nicht auf, aber die Modul-Importe unten könnten es indirekt tun.
+    _builtins_loaded = True
     from sluice.modes.generalizing import GeneralizingMode
     from sluice.modes.passthrough import PassthroughMode
+    from sluice.modes.pii_ner import PiiNerMode
+    from sluice.modes.pii_regex import PiiRegexMode
     from sluice.modes.pseudonymizing import PseudonymizingMode
     from sluice.modes.strict import StrictMode
 
-    register_mode(
+    _register_builtin(
         "strict",
         lambda p: StrictMode(
             detector_profile=p.detector_profile, dictionary_terms=p.dictionary_terms
         ),
     )
-    register_mode("passthrough", lambda p: PassthroughMode())
-    register_mode("generalizing", lambda p: GeneralizingMode())
-    register_mode(
+    _register_builtin("passthrough", lambda p: PassthroughMode())
+    _register_builtin("generalizing", lambda p: GeneralizingMode())
+    _register_builtin(
         "pseudonymizing",
         lambda p: PseudonymizingMode(ttl_seconds=p.reversible.ttl_seconds if p.reversible else 3600),
     )
-    _builtins_loaded = True
+    # Rev. 12 — die zweistufige PII-Erkennung (§5.3). `pii_ner` ist Unterklasse von
+    # `pii_regex`: die Regex-Stufe ist strukturell dieselbe, das Modell kommt additiv dazu.
+    _register_builtin(
+        "pii_regex",
+        lambda p: PiiRegexMode(
+            detector_profile=p.detector_profile, dictionary_terms=p.dictionary_terms
+        ),
+    )
+    _register_builtin(
+        "pii_ner",
+        lambda p: PiiNerMode(
+            detector_profile=p.detector_profile,
+            dictionary_terms=p.dictionary_terms,
+            ner_config=p.ner,
+        ),
+    )
 
 
 def registered_modes() -> set[str]:

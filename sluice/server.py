@@ -73,7 +73,19 @@ def _bad_request(reason: str) -> JSONResponse:
     return JSONResponse({"error": {"type": "sluice_bad_request", "reason": reason}}, status_code=400)
 
 
-def _blocked(reason: str) -> JSONResponse:
+def _blocked(reason: str, error_type: str | None = None) -> JSONResponse:
+    """Blockade an den Aufrufer (§7.2). Rev. 12: Ausfall ≠ Ablehnung (§5.3).
+
+    Eine Policy-Ablehnung ist 403 — der Aufrufer darf das nicht, und ein Retry ändert
+    daran nichts. Ein **Modus-Ausfall** (NER-Dienst weg, Timeout gerissen) ist 503 mit
+    eigenem Fehlertyp: die Anfrage wäre erlaubt gewesen, der Riegel konnte sie nur nicht
+    prüfen. Beides blockiert gleich hart — aber nur die zweite Lage ist ein Betriebs-
+    vorfall, und sie darf im 403-Rauschen nicht untergehen.
+    """
+    if error_type == "mode_unavailable":
+        return JSONResponse(
+            {"error": {"type": "sluice_mode_unavailable", "reason": reason}}, status_code=503
+        )
     return JSONResponse({"error": {"type": "sluice_blocked", "reason": reason}}, status_code=403)
 
 
@@ -149,6 +161,24 @@ def create_app(
             {"status": "ok", "profiles": len(resolved), "provider_lock": lock}
         )
 
+    async def anonymization_identity(request: Request) -> JSONResponse:
+        """Die profilverankerte Anonymisierungs-Identität (§5.4, Rev. 12).
+
+        Macht das Akzeptanzkriterium prüfbar, ohne ins Audit schauen zu müssen:
+        Modellversion (Repo + Revision) und Schwellwert sind hier direkt ableitbar.
+        Unbekanntes Profil ⇒ 404, nicht etwa eine Default-Identität — eine erfundene
+        Identität wäre schlimmer als keine.
+        """
+        name = request.query_params.get("profile", "")
+        profile = resolved.get(name)
+        if profile is None:
+            return JSONResponse(
+                {"error": {"type": "sluice_unknown_profile", "reason": f"Profil '{name}' unbekannt."}},
+                status_code=404,
+            )
+        identity = profile.anonymization_identity()
+        return JSONResponse({"profile": name, "digest": identity.digest(), **identity.as_dict()})
+
     async def egress_guard(request: Request) -> JSONResponse:
         """Guard-only (§7.1): Antwort immer 200, `released` trägt die Entscheidung."""
         try:
@@ -175,6 +205,13 @@ def create_app(
                 "sanitized_text": outcome.sanitized_text,
                 "sanitized_messages": outcome.sanitized_messages,
                 "reason": outcome.reason,
+                # Rev. 12 (§5.3): unterscheidet Policy-Ablehnung von Modus-Ausfall. Der
+                # Guard-only-Pfad antwortet vertragsgemäß immer 200 — der Konsument
+                # dispatcht selbst und muss die Art der Blockade hier ablesen können.
+                "error_type": outcome.error_type,
+                "anonymization_identity": (
+                    profile.anonymization_identity().as_dict() if profile else None
+                ),
             }
         )
 
@@ -239,7 +276,7 @@ def create_app(
             if body.get("stream"):
                 stream_outcome = await guarded_stream(adapter=adapter, **common)
                 if not stream_outcome.released or stream_outcome.chunks is None:
-                    return _blocked(stream_outcome.reason)
+                    return _blocked(stream_outcome.reason, stream_outcome.error_type)
 
                 async def sse() -> Any:
                     async for chunk in stream_outcome.chunks:
@@ -255,7 +292,7 @@ def create_app(
 
             outcome = await guarded_completion(adapter=adapter, **common)
             if not outcome.released:
-                return _blocked(outcome.reason)
+                return _blocked(outcome.reason, outcome.error_type)
             return JSONResponse(
                 {
                     "object": "chat.completion",
@@ -283,6 +320,7 @@ def create_app(
         routes=[
             Route("/v1/health", health, methods=["GET"]),
             Route("/v1/egress/guard", egress_guard, methods=["POST"]),
+            Route("/v1/anonymization-identity", anonymization_identity, methods=["GET"]),
             Route("/v1/chat/completions", chat_completions, methods=["POST"]),
         ]
     )

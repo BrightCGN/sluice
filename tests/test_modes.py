@@ -176,3 +176,74 @@ def test_builtin_modes_are_registered() -> None:
     assert {"strict", "passthrough", "generalizing", "pseudonymizing"} <= modes
     assert is_registered_mode("strict")
     assert not is_registered_mode("nonexistent-mode")
+
+
+# ---------- Registry-Reihenfolge (Rev. 12) ----------
+
+
+def test_register_mode_wirkt_auch_vor_dem_lazy_laden_der_builtins() -> None:
+    """Der Erweiterungspunkt (§3) darf nicht an der Aufrufreihenfolge hängen.
+
+    Registriert sich ein Dritter, *bevor* irgendetwas die Built-ins angefasst hat, würde
+    die spätere Lazy-Ladung ihn ohne diese Absicherung still überschreiben — der Modus
+    wäre je nach Importpfad da oder nicht. Der Test simuliert den frischen Zustand.
+    """
+    import sluice.modes as modes_module
+    from sluice.modes import register_mode, registered_modes, select_mode
+
+    saved_factories = dict(modes_module._MODE_FACTORIES)
+    saved_loaded = modes_module._builtins_loaded
+    saved_instances = dict(modes_module._instances)
+
+    class ThirdPartyMode:
+        reversible = False
+        name = "dritt-modus"
+        enforce_verifier = True
+
+        async def forward(self, payload, scope):  # type: ignore[no-untyped-def]
+            return None
+
+    try:
+        # Frischer Prozesszustand: nichts geladen, nichts registriert.
+        modes_module._MODE_FACTORIES.clear()
+        modes_module._instances.clear()
+        modes_module._builtins_loaded = False
+
+        register_mode("dritt-modus", lambda p: ThirdPartyMode())
+
+        # Beides muss danach dastehen — der Dritt-Modus UND die Built-ins.
+        assert "dritt-modus" in registered_modes()
+        assert {"strict", "passthrough", "pii_regex", "pii_ner"} <= registered_modes()
+
+        profile = Profile(name="p", mode="dritt-modus", allowed_purposes=("x",))
+        assert select_mode(profile).name == "dritt-modus"
+    finally:
+        modes_module._MODE_FACTORIES.clear()
+        modes_module._MODE_FACTORIES.update(saved_factories)
+        modes_module._instances.clear()
+        modes_module._instances.update(saved_instances)
+        modes_module._builtins_loaded = saved_loaded
+
+
+def test_registrierung_ueberschreibt_einen_gleichnamigen_builtin() -> None:
+    """Ein Built-in ersetzbar zu machen ist der Sinn der Registry (§3)."""
+    import sluice.modes as modes_module
+    from sluice.modes import register_mode, select_mode
+
+    original = modes_module._MODE_FACTORIES.get("strict")
+    saved_instances = dict(modes_module._instances)
+
+    class ErsatzStrict:
+        reversible = False
+        name = "strict"
+        enforce_verifier = True
+
+    try:
+        register_mode("strict", lambda p: ErsatzStrict())
+        modes_module._instances.clear()
+        assert isinstance(select_mode(Profile(name="p", mode="strict")), ErsatzStrict)
+    finally:
+        if original is not None:
+            modes_module._MODE_FACTORIES["strict"] = original
+        modes_module._instances.clear()
+        modes_module._instances.update(saved_instances)

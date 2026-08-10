@@ -38,6 +38,9 @@ class CompletionOutcome:
     response_text: str | None = None
     provider: str | None = None
     model: str | None = None
+    # Rev. 12: trägt die Blockade-*Art* aus dem Guard weiter (§5.3). None = Policy-/
+    # Verifier-Entscheidung; `mode_unavailable` = ein Modus konnte nicht liefern.
+    error_type: str | None = None
 
 
 @dataclass
@@ -47,6 +50,7 @@ class StreamOutcome:
     released: bool
     reason: str
     chunks: AsyncIterator[str] | None = None
+    error_type: str | None = None  # wie CompletionOutcome (Rev. 12, §5.3)
 
 
 async def _guard(
@@ -58,8 +62,8 @@ async def _guard(
     provider_target: str,
     mode: Mode | None,
     audit: AuditLog | None,
-) -> tuple[list[dict[str, object]] | None, Mode | None, str]:
-    """Gemeinsamer Guard-Vorlauf; gibt (sanitisierte Messages, Modus, reason) zurück."""
+) -> tuple[list[dict[str, object]] | None, Mode | None, str, str | None]:
+    """Gemeinsamer Guard-Vorlauf; gibt (Messages, Modus, reason, error_type) zurück."""
     outcome = await guarded_egress(
         profile=profile,
         purpose=purpose,
@@ -70,7 +74,7 @@ async def _guard(
         audit=audit,
     )
     if not outcome.released:
-        return None, None, outcome.reason
+        return None, None, outcome.reason, outcome.error_type
 
     assert profile is not None  # released=true impliziert ein Profil (Invariante 1)
     chosen = mode if mode is not None else select_mode(profile)
@@ -78,7 +82,7 @@ async def _guard(
     if messages is None:
         assert outcome.sanitized_text is not None
         messages = [{"role": "user", "content": outcome.sanitized_text}]
-    return messages, chosen, outcome.reason
+    return messages, chosen, outcome.reason, outcome.error_type
 
 
 async def guarded_completion(
@@ -100,7 +104,7 @@ async def guarded_completion(
     (§7.3, Rev. 7 — ohne konfiguriertes Gateway fail-closed, nie direkt).
     Blockt der Guard, wird der Adapter NIE berührt (fail-closed, Invariante 2).
     """
-    messages, chosen, reason = await _guard(
+    messages, chosen, reason, error_type = await _guard(
         profile=profile,
         purpose=purpose,
         payload=payload,
@@ -110,7 +114,7 @@ async def guarded_completion(
         audit=audit,
     )
     if messages is None or chosen is None:
-        return CompletionOutcome(released=False, reason=reason)
+        return CompletionOutcome(released=False, reason=reason, error_type=error_type)
 
     provider = adapter if adapter is not None else select_egress_adapter(provider_target)
     response = await provider.complete(messages, model=model, max_tokens=max_tokens)
@@ -153,7 +157,7 @@ async def guarded_stream(
     `stream_reverser` — ein Pseudonym kann über zwei Chunks reichen
     (kritischer Failure-Mode Streaming-Passthrough).
     """
-    messages, chosen, reason = await _guard(
+    messages, chosen, reason, error_type = await _guard(
         profile=profile,
         purpose=purpose,
         payload=payload,
@@ -163,7 +167,7 @@ async def guarded_stream(
         audit=audit,
     )
     if messages is None or chosen is None:
-        return StreamOutcome(released=False, reason=reason)
+        return StreamOutcome(released=False, reason=reason, error_type=error_type)
 
     provider = adapter if adapter is not None else select_egress_adapter(provider_target)
     reverser = (

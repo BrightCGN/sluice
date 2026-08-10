@@ -79,6 +79,10 @@ def require_api_key(env_var: str, provider: str) -> str:
 # Aliase auf den kanonischen Adapter-Namen — Profile sprechen historisch von "claude" (§4).
 _ALIASES = {"claude": "anthropic"}
 
+# Alle kanonischen Provider — eine Quelle für Registry und Gateway-Auswahl, damit ein
+# neuer Provider nicht an einer der beiden Stellen vergessen werden kann.
+CANONICAL_PROVIDERS = ("anthropic", "openai", "gemini", "mistral")
+
 
 def canonical_provider(name: str) -> str:
     """Kanonischer Provider-Name für Vergleiche (z. B. `SLUICE_PROVIDER`-Lock, §7.3)."""
@@ -119,7 +123,7 @@ def select_egress_adapter(
     Der Dispatch ruft den Adapter erst nach `released=true` (Invariante 2).
     """
     canonical = canonical_provider(name)
-    if canonical not in ("anthropic", "openai", "gemini", "mistral"):
+    if canonical not in CANONICAL_PROVIDERS:
         raise ProviderConfigError(
             f"Unbekannter Provider '{name}' (§7.3): kein Adapter registriert."
         )
@@ -142,6 +146,7 @@ def select_egress_adapter(
 
 
 __all__ = [
+    "CANONICAL_PROVIDERS",
     "PROVIDER_TIMEOUT",
     "ProviderAdapter",
     "canonical_provider",
