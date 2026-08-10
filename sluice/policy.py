@@ -21,7 +21,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from sluice.ner import DEFAULT_LABELS, DEFAULT_THRESHOLD, DEFAULT_TIMEOUT_SECONDS, NerConfig
+from sluice.ner import (
+    DEFAULT_CHUNK_OVERLAP_CHARS,
+    DEFAULT_LABELS,
+    DEFAULT_MAX_CHARS_PER_CHUNK,
+    DEFAULT_THRESHOLD,
+    DEFAULT_TIMEOUT_SECONDS,
+    NerConfig,
+)
 
 if TYPE_CHECKING:
     from sluice.identity import AnonymizationIdentity
@@ -226,6 +233,24 @@ def _parse_ner(profile_name: str, raw: dict) -> NerConfig | None:
             f"als Ausfall, §5.3)."
         )
 
+    # Zerlegung langer Texte (§5.3). Beides muss > 0 sein: eine Stückgröße von 0 wäre
+    # keine Zerlegung, und ohne Überlappung würde jede Entität an einer Schnittstelle
+    # zerschnitten und damit in beiden Stücken verfehlt — ein stilles Recall-Loch genau
+    # an den Stellen, die die Zerlegung erst nötig gemacht haben.
+    max_chars = int(block.get("max_chars_per_chunk", DEFAULT_MAX_CHARS_PER_CHUNK))
+    overlap = int(block.get("chunk_overlap_chars", DEFAULT_CHUNK_OVERLAP_CHARS))
+    if max_chars <= 0:
+        raise ValueError(
+            f"Profil '{profile_name}': ner.max_chars_per_chunk muss > 0 sein — ohne "
+            f"Stückgröße würde das Modell lange Texte still kürzen (§5.3)."
+        )
+    if not 0 < overlap < max_chars:
+        raise ValueError(
+            f"Profil '{profile_name}': ner.chunk_overlap_chars muss zwischen 1 und "
+            f"max_chars_per_chunk ({max_chars}) liegen, ist {overlap}. Ohne Überlappung "
+            f"wird jede Entität an einer Schnittstelle verfehlt (§5.3)."
+        )
+
     return NerConfig(
         url=block.get("url"),
         threshold=float(threshold) if threshold is not None else DEFAULT_THRESHOLD,
@@ -236,6 +261,8 @@ def _parse_ner(profile_name: str, raw: dict) -> NerConfig | None:
         model_precision=str(block.get("model_precision", "")),
         cache_size=int(block.get("cache_size", 1024)),
         threshold_declared=threshold is not None,
+        max_chars_per_chunk=max_chars,
+        chunk_overlap_chars=overlap,
     )
 
 

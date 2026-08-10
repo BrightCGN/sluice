@@ -57,6 +57,39 @@ FIXED_BATCH_SIZE = 1
 
 DEFAULT_TIMEOUT_SECONDS = 5.0
 
+# --- Kontextfenster und Zerlegung (§5.3) ---------------------------------------------
+# GLiNER-Modelle haben ein festes Token-Fenster (typisch 384) und **kürzen längere
+# Eingaben still**. Für einen Egress-Riegel ist das die gefährlichste Sorte Fehler: die
+# Erkennung meldet keinen Ausfall, sie sieht den hinteren Teil des Textes schlicht nie —
+# und Sluice würde `released=true` melden, als wäre alles geprüft worden. Deshalb zwei
+# Vorkehrungen, die zusammengehören:
+#
+#   1. Der Dienst blockiert, wenn tatsächlich gekürzt wurde (`NerTruncationError`).
+#      Das ist das Sicherheitsnetz — es greift auch, wenn die Zerlegung unten falsch
+#      dimensioniert ist.
+#   2. Der Client zerlegt lange Texte vorher in überlappende Stücke, sodass Fall 1 im
+#      Normalbetrieb gar nicht eintritt.
+#
+# Die Stückgröße ist bewusst **Konfiguration und nicht aus dem Dienst abgeleitet**: sie
+# verändert das Ergebnis (andere Schnitte ⇒ andere Spans) und gehört damit in die
+# Anonymisierungs-Identität (§5.4). Ein aus `/info` übernommener Wert würde sie still
+# verschieben, sobald das Modell wechselt.
+
+# Sehr konservativ: deutsche Subword-Tokenizer liegen eher bei 3–4 Zeichen je Token.
+# Der Wert dient nur der *Plausibilitätsschranke* gegen das gemeldete Fenster.
+CONSERVATIVE_CHARS_PER_TOKEN = 2.0
+
+# Fenster, das angenommen wird, wenn der Dienst keines meldet (ältere Fassung).
+FALLBACK_MAX_TOKENS = 384
+
+# 700 Zeichen passen auch im ungünstigsten Fall in ein 384-Token-Fenster.
+DEFAULT_MAX_CHARS_PER_CHUNK = 700
+
+# Überlappung, damit eine Entität an der Schnittstelle in mindestens einem Stück
+# vollständig enthalten ist. Ohne sie zerschnitte die Zerlegung genau die Namen, die
+# sie finden soll.
+DEFAULT_CHUNK_OVERLAP_CHARS = 200
+
 
 class NerError(ModeUnavailableError):
     """Basis aller NER-Fehler.
@@ -84,6 +117,20 @@ class NerIdentityError(NerError):
     """
 
 
+class NerTruncationError(NerError):
+    """Das Modell hat die Eingabe gekürzt — der hintere Teil wurde **nie geprüft**.
+
+    Der gefährlichste Fehler in dieser Stufe, weil er ohne Vorkehrung *stumm* ist: es
+    fällt nichts aus, es antwortet nichts falsch, das Modell sieht den Rest einfach nicht.
+    Ein Name im zweiten Absatz ginge ungeschwärzt raus, während das Audit `released=true`
+    protokolliert — eine Zusicherung, die nie geprüft wurde.
+
+    Deshalb fail-closed wie ein Ausfall (§5.3): lieber ein harter Fehler als eine stille
+    Lücke. Im Normalbetrieb tritt er nicht auf, weil der Client lange Texte vorher
+    zerlegt; er ist das Netz *darunter*, nicht der reguläre Weg.
+    """
+
+
 @dataclass(frozen=True)
 class NerConfig:
     """Profilverankerte NER-Konfiguration (§4/§5.4, Rev. 12).
@@ -100,6 +147,8 @@ class NerConfig:
                       bitgleich und senkt die Latenz. 0 schaltet ihn ab.
     threshold_declared: ob das Profil den Schwellwert selbst gesetzt hat. Nur für die
                       Ehrlichkeit der Identität — ein geerbter Default heißt unkalibriert.
+    max_chars_per_chunk / chunk_overlap_chars: Zerlegung langer Texte (§5.3). Beide
+                      verändern das Ergebnis und sind deshalb Teil der Identität (§5.4).
     """
 
     url: str | None = None
@@ -111,6 +160,8 @@ class NerConfig:
     model_precision: str = ""
     cache_size: int = 1024
     threshold_declared: bool = False
+    max_chars_per_chunk: int = DEFAULT_MAX_CHARS_PER_CHUNK
+    chunk_overlap_chars: int = DEFAULT_CHUNK_OVERLAP_CHARS
 
 
 @dataclass(frozen=True)
@@ -131,6 +182,11 @@ class ServiceInfo:
     Profil-Schwellwert liegen, sonst wäre die profilverankerte Schwelle wirkungslos —
     der Dienst hätte die Spans schon weggeworfen, bevor Sluice sie sieht. Der Client
     prüft das fail-closed (§5.4).
+
+    `max_tokens` ist das Kontextfenster des Modells. Es wird **nicht** übernommen, um
+    daraus die Stückgröße abzuleiten — die ist Konfiguration (§5.4) —, sondern als
+    Schranke: passt die konfigurierte Stückgröße nicht ins Fenster, blockiert der Client,
+    statt auf still gekürzte Eingaben zu laufen. 0 heißt „Dienst meldet es nicht".
     """
 
     model: str
@@ -139,6 +195,7 @@ class ServiceInfo:
     labels: tuple[str, ...] = field(default_factory=tuple)
     backend: str = ""
     score_floor: float = 0.0
+    max_tokens: int = 0
 
 
 def placeholder_for(label: str) -> str:
@@ -147,9 +204,13 @@ def placeholder_for(label: str) -> str:
 
 
 __all__ = [
+    "CONSERVATIVE_CHARS_PER_TOKEN",
+    "DEFAULT_CHUNK_OVERLAP_CHARS",
     "DEFAULT_LABELS",
+    "DEFAULT_MAX_CHARS_PER_CHUNK",
     "DEFAULT_THRESHOLD",
     "DEFAULT_TIMEOUT_SECONDS",
+    "FALLBACK_MAX_TOKENS",
     "FALLBACK_PLACEHOLDER",
     "FIXED_BATCH_SIZE",
     "LABEL_PLACEHOLDERS",
@@ -157,6 +218,7 @@ __all__ = [
     "NerError",
     "NerIdentityError",
     "NerSpan",
+    "NerTruncationError",
     "NerUnavailableError",
     "ServiceInfo",
     "placeholder_for",

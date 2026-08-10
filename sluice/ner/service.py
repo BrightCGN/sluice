@@ -40,7 +40,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from sluice.ner import DEFAULT_LABELS, FIXED_BATCH_SIZE
+from sluice.ner import DEFAULT_LABELS, FIXED_BATCH_SIZE, NerTruncationError
 from sluice.ner.engine import NerEngine, build_engine_from_env
 
 log = structlog.get_logger("sluice.ner.service")
@@ -95,6 +95,10 @@ def create_ner_app(
                 "backend": info.backend,
                 "score_floor": info.score_floor,
                 "batch_size": FIXED_BATCH_SIZE,
+                # Kontextfenster (§5.3) — Sluice prüft damit, ob seine konfigurierte
+                # Stückgröße hineinpasst, und blockiert sonst. Der Dienst leitet daraus
+                # selbst nichts ab; Zerlegung ist Sache des Kerns.
+                "max_tokens": info.max_tokens,
             }
         )
 
@@ -135,6 +139,13 @@ def create_ner_app(
 
         try:
             spans = resolved_engine.detect(text, labels)
+        except NerTruncationError as exc:
+            # Eigener Status und eigener Typ, nicht der 500er-Sammeltopf: das ist kein
+            # Defekt des Dienstes, sondern eine zu lange Eingabe — und der Aufrufer kann
+            # etwas dagegen tun (zerlegen). Die Unterscheidung entscheidet, ob im Betrieb
+            # nach einem Ausfall gesucht wird oder nach einer Konfiguration.
+            log.warning("ner.detect.truncated", chars=len(text), error=str(exc))
+            return _error(413, "ner_text_truncated", str(exc))
         except Exception as exc:  # noqa: BLE001 - der Dienst meldet, Sluice blockiert
             log.error("ner.detect.failed", error=str(exc))
             return _error(500, "ner_engine_error", f"Erkennung fehlgeschlagen: {exc}")

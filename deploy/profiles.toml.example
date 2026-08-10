@@ -88,4 +88,9 @@ detector_profile    = "pii_de"
   model_repo      = "urchade/gliner_multi_pii-v1"
   model_revision  = ""            # Commit-Hash eintragen, sonst ist die Identität wertlos
   model_precision = "fp32"
+  # Zerlegung langer Texte (§5.3). Das Modell kürzt still über seinem Token-Fenster;
+  # ohne Zerlegung prüft die NER-Stufe nur den Anfang und meldet trotzdem Erfolg.
+  # Der Default ist konservativ — nur mit einer Messung vergrößern, nie geschätzt.
+  max_chars_per_chunk = 700
+  chunk_overlap_chars = 200
 

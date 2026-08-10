@@ -139,6 +139,8 @@ Betriebsdetails, Modellauswahl und Messung: `docs/NER-SERVICE.md`.
 | `model_revision` | String | `""` | Commit-Hash. **Ohne ihn ist die Identität wertlos** — das Repo könnte sich unter derselben Kennung ändern. |
 | `model_precision` | String | `""` | Geladene Präzision (`fp32`/`fp16`/`uint8`); ebenfalls gegen `/v1/info` geprüft. |
 | `cache_size` | Int | `1024` | Einträge des Inhalts-Hash-Caches. `0` schaltet ihn ab. |
+| `max_chars_per_chunk` | Int | `700` | Stückgröße für lange Texte (§5.3). Muss ins **Token-Fenster** des Modells passen — Sluice prüft das gegen `/v1/info` und blockiert sonst. Teil der Identität. |
+| `chunk_overlap_chars` | Int | `200` | Überlappung der Stücke. Muss **> 0** und kleiner als `max_chars_per_chunk` sein; sie muss länger sein als die längste erwartete Entität. Teil der Identität. |
 
 ```toml
 [profile."prismclaw-ner"]
@@ -170,6 +172,16 @@ curl 'http://127.0.0.1:17800/v1/anonymization-identity?profile=prismclaw-ner'
 > im Dienst **über** dem Profil-`threshold`, wäre die verankerte Schwelle wirkungslos. Sluice
 > erkennt das und blockiert fail-closed. Symptom: jeder Request scheitert mit einem Hinweis auf
 > `score_floor`. Lösung: den Floor im Dienst senken, nicht den Profil-Schwellwert anheben.
+
+> **Fallstrick 7 — `max_chars_per_chunk` zu groß gewählt:** GLiNER-Modelle haben ein festes
+> Token-Fenster (typisch 384) und kürzen längere Eingaben **still**. Ohne Zerlegung prüft die
+> NER-Stufe nur den Anfang eines langen Textes und meldet trotzdem Erfolg — ein Name im zweiten
+> Absatz ginge ungeschwärzt raus, während das Audit `released=true` protokolliert. Sluice
+> vergleicht die Stückgröße deshalb beim ersten Kontakt mit dem gemeldeten `max_tokens` und
+> blockiert, wenn sie nicht hineinpasst; kürzt das Modell trotzdem, blockiert der Dienst
+> (`ner_text_truncated`). **Der Default ist konservativ — vergrößere ihn nur mit einer Messung,
+> nie mit einer Schätzung.** Er ist Teil der Identität: eine Änderung verschiebt den Digest,
+> weil andere Schnitte zu anderen Spans führen.
 
 ---
 

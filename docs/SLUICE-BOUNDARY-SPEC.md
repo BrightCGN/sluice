@@ -519,6 +519,25 @@ er darf im 403-Rauschen nicht untergehen. Der Guard greift generisch am Fehlerty
 Abhängigkeit erbt das Verhalten. Fehlende Dienst-URL wird genauso behandelt wie ein Ausfall —
 dieselbe Härte wie die Gateway-Pflicht (Rev. 7).
 
+**Fail-closed auf der Vollständigkeits-Achse: keine stille Kürzung.** Das Modell hat ein
+festes Token-Fenster und kürzt längere Eingaben **still** darauf — es meldet keinen Fehler,
+es sieht den hinteren Teil schlicht nie. Das ist gefährlicher als ein Ausfall: ein Ausfall
+blockiert, eine Kürzung lässt durch, und das Audit protokolliert `released=true` für einen
+Text, der nur zur Hälfte geprüft wurde. Deshalb gilt:
+
+1. Der Dienst **blockiert**, wenn tatsächlich gekürzt wurde (413 `ner_text_truncated` ⇒
+   `ModeUnavailableError` ⇒ 503). Die Prüfung greift am tatsächlichen Ereignis, nicht an
+   einer geschätzten Längenschranke — sie gilt damit für jedes Modell und jeden Tokenizer.
+2. Der Kern **zerlegt** lange Texte vorher in überlappende Stücke (`max_chars_per_chunk`,
+   `chunk_overlap_chars` im Profil) und rechnet die Offsets auf den Originaltext zurück,
+   sodass Punkt 1 im Normalbetrieb nicht eintritt. Die Überlappung ist nicht optional: ohne
+   sie würde jede Entität an einer Schnittstelle in beiden Stücken verfehlt.
+
+Beide Zerlegungsparameter sind **Konfiguration und Teil der Anonymisierungs-Identität**
+(§5.4), nicht aus dem Dienst abgeleitet: andere Schnitte bedeuten anderen Kontext je Stück
+und damit andere Spans. Der Kern prüft beim ersten Kontakt gegen das vom Dienst gemeldete
+`max_tokens` und blockiert, wenn die konfigurierte Stückgröße nicht hineinpasst.
+
 **Kein generatives LLM für die Erkennung.** Nichtdeterministisch, an Span-Grenzen
 halluzinationsanfällig, latenzseitig untauglich für den synchronen Egress-Pfad.
 
@@ -721,7 +740,7 @@ Spans raus.
 POST /v1/detect   (= /detect)   {"text": "…", "labels": ["person", …]}
                               → {"spans": [{"start": int, "end": int, "label": str, "score": float}]}
 GET  /v1/health   (= /health)   Readiness
-GET  /v1/info     (= /info)     {model, revision, precision, labels, backend, score_floor, batch_size}
+GET  /v1/info     (= /info)     {model, revision, precision, labels, backend, score_floor, batch_size, max_tokens}
 ```
 
 `start`/`end` sind **Zeichen**-Offsets, nicht Token-Offsets. Versionierte Pfade sind der Vertrag

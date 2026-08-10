@@ -42,6 +42,7 @@ Der Fehler geht **als solcher** an den Aufrufer und ins Audit:
 |---|---|---|
 | Policy-Ablehnung (Profil, Allowlist, Verifier) | 403 | `sluice_blocked` |
 | **NER-Dienst weg / Timeout / Identitätsabweichung** | **503** | **`sluice_mode_unavailable`** |
+| **Modell hat die Eingabe gekürzt** (§2a) | **503** | **`sluice_mode_unavailable`** |
 
 Die Trennung ist Absicht: eine Ablehnung ist endgültig, ein Ausfall ist ein
 Betriebsvorfall — und er darf im 403-Rauschen nicht untergehen. Im Guard greift die Regel
@@ -51,6 +52,62 @@ Modus mit externer Abhängigkeit erbt das Verhalten.
 Fail-closed greift auch bei **fehlender Konfiguration**: ohne `url` (bzw. `SLUICE_NER_URL`)
 blockiert der Modus, statt die Stufe zu überspringen — dieselbe Härte wie die
 Gateway-Pflicht aus Rev. 7.
+
+---
+
+## 2a. Lange Texte: Kürzung ist die gefährlichste Lücke
+
+GLiNER-Modelle haben ein festes Token-Fenster — bei `urchade/gliner_multi_pii-v1` sind es
+**384 Token** — und kürzen längere Eingaben **still** darauf. Kein Fehler, keine Ausnahme,
+nur eine `UserWarning` im Log der Bibliothek.
+
+Auf der Sluice-VM gemessen (2026-08-10):
+
+```
+Text: 6.304 Zeichen, ein Name im ersten Satz, einer im letzten
+gefunden: ['Anna Schmidt']          ← der Name am Ende fehlt
+UserWarning: Sentence of length 973 has been truncated to 384
+```
+
+**Warum das schlimmer ist als ein Ausfall:** Ein Ausfall blockiert (§2) — die Anfrage
+kommt nicht durch, jemand merkt es. Eine Kürzung *lässt durch*: die Erkennung liefert
+Spans für den vorderen Teil, Sluice hält den Text für geprüft und protokolliert
+`released=true`. Der ungeprüfte Rest geht ungeschwärzt zum Provider. Ein Chokepoint, der
+den halben Text nicht ansieht und trotzdem zusagt, ist keiner.
+
+Zwei Ebenen dagegen, in dieser Reihenfolge:
+
+**1. Das Netz darunter — der Dienst blockiert bei tatsächlicher Kürzung.**
+`GlinerEngine.detect` erhebt genau diese Warnung zur Ausnahme (`NerTruncationError`); der
+Dienst antwortet mit **413 `ner_text_truncated`**, der Client übersetzt das in
+`ModeUnavailableError` ⇒ **503**. Die Prüfung sitzt am *tatsächlichen Ereignis*, nicht an
+einer geschätzten Längenschranke — sie gilt damit für jedes Modell und jeden Tokenizer und
+lässt sich durch eine falsch dimensionierte Zerlegung nicht umgehen.
+
+**2. Der reguläre Weg — der Client zerlegt vorher.** Lange Texte werden in überlappende
+Stücke geschnitten (`max_chars_per_chunk`, `chunk_overlap_chars`), jedes Stück einzeln
+erkannt, die Offsets auf den Originaltext zurückgerechnet und die Ergebnisse vereinigt.
+Ebene 1 greift damit im Normalbetrieb nie.
+
+| Parameter | Default | Warum so |
+|---|---|---|
+| `max_chars_per_chunk` | 700 | Passt auch im ungünstigsten Fall in ein 384-Token-Fenster. Sluice vergleicht den Wert beim ersten Kontakt mit dem gemeldeten `max_tokens` und **blockiert**, wenn er nicht hineinpasst. |
+| `chunk_overlap_chars` | 200 | Eine Entität an der Schnittstelle wäre sonst in beiden Stücken nur halb enthalten und würde in beiden verfehlt. Muss länger sein als die längste erwartete Entität. |
+
+Beide sind **Konfiguration und Teil der Anonymisierungs-Identität** (§5.4) — nicht aus dem
+Dienst abgeleitet. Andere Schnitte bedeuten anderen Kontext je Stück und damit andere
+Spans; würde die Stückgröße aus `/v1/info` übernommen, verschöbe ein Modellwechsel sie
+still und „gleicher Digest ⇒ gleiche Spans" wäre für lange Texte unwahr.
+
+**Preis:** Ein Text von 4.000 Zeichen wird zu etwa 8 Stücken, also 8 Modellaufrufen. Bei
+den gemessenen ~1,2 s für kurze Eingaben summiert sich das — die Zerlegung macht die
+Latenzfrage aus §3 nicht besser, sondern schärfer. Sie ist trotzdem nicht verhandelbar:
+die Alternative ist kein schnellerer Riegel, sondern gar keiner.
+
+Dubletten aus dem Überlappungsbereich werden zusammengefasst; bei unterschiedlichem Score
+gewinnt der **höhere** (die Stufe ist recall-orientiert, §5.4). Echte Überlappungen
+verschiedener Spans bleiben stehen und werden erst in `spans.merge_spans` aufgelöst — dort,
+wo auch der Vorrang der Regex-Stufe entschieden wird.
 
 ---
 

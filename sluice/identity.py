@@ -42,6 +42,12 @@ class NerIdentity:
     labels: tuple[str, ...]
     batch_size: int = FIXED_BATCH_SIZE
     threshold_calibrated: bool = False
+    # Zerlegung langer Texte (§5.3). Gehört in die Identität, weil andere Schnitte zu
+    # anderen Spans führen: das Modell sieht je Stück einen anderen Kontext, und eine
+    # Entität an der Schnittstelle hängt an der Überlappung. Ohne diese beiden Werte
+    # wäre „gleicher Digest ⇒ gleiche Spans" für lange Texte schlicht unwahr.
+    max_chars_per_chunk: int = 0
+    chunk_overlap_chars: int = 0
 
     @classmethod
     def from_config(cls, config: NerConfig) -> NerIdentity:
@@ -52,6 +58,8 @@ class NerIdentity:
             threshold=config.threshold,
             labels=tuple(config.labels),
             threshold_calibrated=config.threshold_declared,
+            max_chars_per_chunk=config.max_chars_per_chunk,
+            chunk_overlap_chars=config.chunk_overlap_chars,
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -63,6 +71,8 @@ class NerIdentity:
             "labels": list(self.labels),
             "batch_size": self.batch_size,
             "threshold_calibrated": self.threshold_calibrated,
+            "max_chars_per_chunk": self.max_chars_per_chunk,
+            "chunk_overlap_chars": self.chunk_overlap_chars,
         }
 
 

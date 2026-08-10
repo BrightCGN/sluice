@@ -25,11 +25,18 @@ laufen (Test-Disziplin).
 from __future__ import annotations
 
 import os
+import warnings
 from typing import Protocol, runtime_checkable
 
 import structlog
 
-from sluice.ner import DEFAULT_LABELS, NerSpan, ServiceInfo
+from sluice.ner import (
+    DEFAULT_LABELS,
+    FALLBACK_MAX_TOKENS,
+    NerSpan,
+    NerTruncationError,
+    ServiceInfo,
+)
 
 log = structlog.get_logger("sluice.ner.engine")
 
@@ -93,6 +100,7 @@ class GlinerEngine:
         self._onnx = onnx
         self._floor = _score_floor()
         self._model = self._load()
+        self._max_tokens = self._detect_max_tokens()
 
     def _load(self) -> object:
         try:
@@ -148,6 +156,21 @@ class GlinerEngine:
         except (AttributeError, RuntimeError):  # pragma: no cover
             log.warning("ner.determinism.partial", hint="use_deterministic_algorithms nicht setzbar")
 
+    def _detect_max_tokens(self) -> int:
+        """Das Kontextfenster des geladenen Modells (§5.3).
+
+        GLiNER führt es als `max_len` in der Modell-Konfiguration. Findet sich dort
+        nichts, wird der übliche Wert angenommen — lieber ein zu *kleines* Fenster
+        annehmen als ein zu großes: eine zu vorsichtige Zerlegung kostet Latenz, eine zu
+        großzügige kostet Recall, und zwar unbemerkt.
+        """
+        for attr in ("max_len", "max_length", "max_width"):
+            value = getattr(getattr(self._model, "config", None), attr, None)
+            if isinstance(value, int) and value > 0:
+                return value
+        log.warning("ner.max_tokens.unknown", fallback=FALLBACK_MAX_TOKENS)
+        return FALLBACK_MAX_TOKENS
+
     def info(self) -> ServiceInfo:
         return ServiceInfo(
             model=self._model_id,
@@ -156,13 +179,39 @@ class GlinerEngine:
             labels=DEFAULT_LABELS,
             backend="gliner-onnx" if self._onnx else f"gliner-torch/{self._device}",
             score_floor=self._floor,
+            max_tokens=self._max_tokens,
         )
 
     def detect(self, text: str, labels: tuple[str, ...]) -> list[NerSpan]:
-        """Ein Text pro Aufruf — die fixierte Batchgröße ist Teil der Zusage (§5.4)."""
-        entities = self._model.predict_entities(  # type: ignore[attr-defined]
-            text, list(labels), threshold=self._floor
-        )
+        """Ein Text pro Aufruf — die fixierte Batchgröße ist Teil der Zusage (§5.4).
+
+        **Kürzung ist hier ein Fehler, kein Hinweis (§5.3).** GLiNER meldet eine zu lange
+        Eingabe nur als `UserWarning` und verarbeitet den Anfang — der Rest wird nie
+        angesehen. Für einen Egress-Riegel ist das die gefährlichste Sorte Fehler, weil
+        nichts ausfällt: Sluice bekäme Spans für den vorderen Teil und hielte den ganzen
+        Text für geprüft. Deshalb wird genau diese Warnung zur Ausnahme erhoben.
+
+        Die Prüfung sitzt bewusst hier und nicht an einer Längenschranke davor: sie greift
+        am *tatsächlichen* Ereignis statt an einer Schätzung, gilt damit für jedes Modell
+        und jeden Tokenizer und kann von einer falsch dimensionierten Zerlegung im Client
+        nicht umgangen werden.
+        """
+        with warnings.catch_warnings():
+            # `catch_warnings` setzt den Filterzustand zurück; sonst würde Pythons
+            # "einmal pro Fundstelle"-Registry die Warnung ab dem zweiten Aufruf
+            # verschlucken — und damit ausgerechnet im Dauerbetrieb.
+            warnings.filterwarnings("error", message=r".*truncat.*", category=UserWarning)
+            try:
+                entities = self._model.predict_entities(  # type: ignore[attr-defined]
+                    text, list(labels), threshold=self._floor
+                )
+            except UserWarning as exc:
+                raise NerTruncationError(
+                    f"Modell hat die Eingabe gekürzt ({len(text)} Zeichen, Fenster "
+                    f"{self._max_tokens} Token): '{exc}'. Der hintere Teil wurde NICHT "
+                    f"geprüft — fail-closed statt stiller Lücke (§5.3). Der Client muss "
+                    f"den Text zerlegen (max_chars_per_chunk)."
+                ) from exc
         spans = [
             NerSpan(
                 start=int(e["start"]),
