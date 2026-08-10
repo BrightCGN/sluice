@@ -351,7 +351,19 @@ Vertrag (§7.4); die unversionierten bleiben als Alias bestehen.
 
 ```bash
 useradd --system --home /opt/sluice --shell /usr/sbin/nologin sluice-ner
-/opt/sluice/.venv/bin/pip install '.[ner]'        # bzw. '.[ner-onnx]' / '.[ner-onnx-gpu]'
+install -d -o sluice-ner -g sluice-ner -m 700 /opt/sluice/models
+
+# torch ZUERST und allein aus dem CPU-Index. Sonst zieht `pip install gliner` die
+# CUDA-Variante samt kompletter nvidia-Laufzeit nach — mehrere GB auf einer Maschine
+# ohne GPU. Ist torch danach erfüllt, lässt gliner die nvidia-Pakete weg.
+/opt/sluice/.venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu torch
+/opt/sluice/.venv/bin/pip install '/opt/sluice[ner]'   # bzw. [ner-onnx] / [ner-onnx-gpu]
+/opt/sluice/.venv/bin/pip list | grep -i -E 'nvidia|cuda' || echo "keine CUDA-Pakete"
+
+# pip lief als root und hat Dateien neu geschrieben — Rechte danach geradeziehen,
+# und den Modell-Cache erst NACH dem rekursiven chmod auf 700 setzen.
+chown -R sluice:sluice /opt/sluice && chmod -R a+rX /opt/sluice
+chown -R sluice-ner:sluice-ner /opt/sluice/models && chmod -R go-rwx /opt/sluice/models
 
 install -m600 -o root deploy/ner.env.example /etc/sluice/ner.env
 $EDITOR /etc/sluice/ner.env                       # Modell + REVISION eintragen
@@ -361,6 +373,23 @@ systemctl daemon-reload && systemctl enable --now sluice-ner
 curl http://127.0.0.1:17900/v1/health
 curl http://127.0.0.1:17900/v1/info
 ```
+
+**Modell vorab und getrennt laden.** Der erste Dienststart würde es sonst mitten im
+`TimeoutStartSec`-Fenster holen, und ein Abbruch kostet dann den ganzen Startversuch:
+
+```bash
+sudo -u sluice-ner HF_HOME=/opt/sluice/models HF_HUB_DISABLE_XET=1 \
+  /opt/sluice/.venv/bin/python -c \
+  "from huggingface_hub import snapshot_download; print(snapshot_download('<repo>'))"
+```
+
+`HF_HUB_DISABLE_XET=1` ist hier kein Detail: HuggingFace lädt große Dateien über eine
+eigene Chunk-Infrastruktur (`hf_xet`) mit anderen Endpunkten als der normale
+HTTPS-Download. Hinter einer restriktiven Firewall — und der NER-Host steht per Definition
+hinter einer — bricht das gern mitten im Transfer ab (`CAS Client Error: … error decoding
+response body`). Der klassische Pfad ist langsamer, aber robust und nimmt einen
+abgebrochenen Download wieder auf. Hilft das nicht, `pip uninstall hf-xet` — dann gibt es
+den Pfad gar nicht mehr; das kostet nur Tempo, nichts an Funktion.
 
 Wie die Provider-Gateways (Rev. 6/8) ist das ein **interner** Dienst: eigener System-User,
 eingehend nur vom Sluice-Kern (Firewall), optional Shared Secret `SLUICE_NER_TOKEN`. Er
