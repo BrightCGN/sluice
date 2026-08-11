@@ -89,6 +89,21 @@ Punkte: `docs/NER-SERVICE.md` §9.
 Offen (§10): Open-Source-Split (generischer Kern öffentlich, Homelab-/Konsumenten-Details
 privat), öffentliches Modus-Plugin-API.
 
+## Entstehung
+
+Die Umsetzung ist **KI-unterstützt** entstanden (Claude Code); die `Co-Authored-By`-Trailer
+in der Historie weisen aus, welche Commits so zustande kamen. Der Entwurf ist es nicht:
+`docs/SLUICE-BOUNDARY-SPEC.md` ist die Wahrheitsquelle und in menschlicher Verantwortung,
+`CLAUDE.md` zieht die Leitplanken — insbesondere die Grenze zwischen generischem
+Mechanismus und Konsumenten-Domäne (§1.1), die bewusst *nicht* aus dem Modell heraus
+gezogen wird.
+
+Was das praktisch heißt: Jede Verhaltensänderung ist testgedeckt (aktuell 242 Tests, kein
+Netzzugriff darin), jede nicht offensichtliche Entscheidung steht mit Begründung in der
+Commit-Nachricht oder in `docs/`, und wo eine Annahme ungeprüft blieb, ist sie als solche
+benannt statt als Ergebnis ausgegeben. Der Maßstab ist der eines Werkzeugs an einer
+Sicherheitsgrenze: im Zweifel blockieren, nichts zusagen, was nicht nachgesehen wurde.
+
 ## Lizenz
 
 Apache-2.0 — siehe [`LICENSE`](LICENSE). Copyright 2026 Richard Cochius.
