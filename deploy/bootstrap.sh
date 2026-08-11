@@ -112,9 +112,15 @@ if [[ "${REPO_DIR}" != "${APP_DIR}" ]]; then
     log "Kopiere Repo nach ${APP_DIR} …"
     # --delete hält /opt/sluice deckungsgleich mit dem Checkout; .venv ist
     # ausgenommen, damit ein Update nicht die Installation wegräumt.
+    #
+    # 'models' aus demselben Grund, und der wiegt schwerer: der HF-Modell-Cache (§7.5)
+    # entsteht NUR auf der Zielmaschine und hat im Repo kein Gegenstück — --delete würde
+    # ihn also bei jedem Deploy aus einem Checkout außerhalb von ${APP_DIR} restlos
+    # löschen. Gigabytes, ein erneuter Download hinter der Firewall, und der NER-Dienst
+    # kommt bis dahin nicht hoch (fail-closed: pii_ner-Profile blockieren mit 503).
     rsync -a --delete \
         --exclude '.git' --exclude '__pycache__' --exclude '.venv' \
-        --exclude '.pytest_cache' \
+        --exclude '.pytest_cache' --exclude 'models' \
         "${REPO_DIR}/" "${APP_DIR}/"
 fi
 
@@ -161,7 +167,13 @@ normalize_app_perms() {
     # Der Modell-Cache ist die Ausnahme: das rekursive a+rX oben würde seine 700
     # aufreißen und das chown ihn dem Kern-User zuschlagen, worauf der NER-Dienst ihn
     # nicht mehr aktualisieren könnte. Deshalb danach, und rekursiv.
-    if [[ "${WITH_NER}" == "1" && -d "${APP_DIR}/models" ]]; then
+    #
+    # Bedingung ist die EXISTENZ des Verzeichnisses, nicht WITH_NER. Sonst räumt ein
+    # Kern-Bootstrap (ohne SLUICE_WITH_NER=1) auf einer Maschine MIT NER-Dienst dessen
+    # Rechte still ab: das chown/chmod oben läuft ja unbedingt, nur die Korrektur hier
+    # bliebe aus. Der NER-User verliert damit den Schreibzugriff auf seinen eigenen
+    # Cache — und das fällt erst beim nächsten Modell-Download auf, nicht beim Lauf.
+    if [[ -d "${APP_DIR}/models" ]] && id "${NER_USER}" &>/dev/null; then
         chown -R "${NER_USER}:${NER_USER}" "${APP_DIR}/models"
         chmod -R go-rwx "${APP_DIR}/models"
     fi
