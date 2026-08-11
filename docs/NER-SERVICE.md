@@ -4,7 +4,9 @@
 > **Status der Deployment-Entscheidung: CPU auf der Sluice-VM trägt nicht — auf der VM
 > selbst bestätigt** (2026-08-11, zwei unabhängige Läufe): **1,24 s** bei 200 Zeichen,
 > **8,6 s** bei 4.000 — pro Request, im *synchronen* Egress-Pfad, vor dem Provider-Aufruf.
-> Offen bleibt allein der ONNX/INT8-Pfad.
+> **ONNX Runtime trägt für kurze Texte** (173 ms bei 200 Zeichen); **Quantisierung nicht**
+> — ohne VNNI ist uint8 rund 18 % *langsamer* als fp32. Offen sind Modellwahl nach Recall
+> und die Schwellwert-Kalibrierung; beides braucht einen Dev-Split (`NER-EVAL-SPLIT.md`).
 
 ---
 
@@ -113,7 +115,7 @@ wo auch der Vorrang der Regex-Stufe entschieden wird.
 
 ## 3. Deployment: erst messen, dann entscheiden
 
-### 3.1 Die zwei Werte — Stand: **Wert 2 gemessen (Proxy), Wert 1 offen**
+### 3.1 Die zwei Werte — Stand: **Wert 2 auf der VM gemessen, Wert 1 offen**
 
 | # | Frage | Stand |
 |---|---|---|
@@ -358,16 +360,21 @@ Kanzleitexten regelmäßig. Format (JSONL):
 Zwei getrennte Splits: **`dev` zum Kalibrieren, `test` zum Berichten.** Auf demselben
 Split zu tunen und zu berichten überschätzt die Güte systematisch.
 
+**Der Datensatz gehört NICHT ins Repo** — er besteht aus echten personenbezogenen Daten,
+und ein einmal committeter Bestand ist über den Git-Verlauf nicht mehr zu entfernen.
+Ablage unter `/var/lib/sluice-eval` (0700). Wie der Split entsteht — Umfang, Auswahl,
+Annotationsregeln, Qualitätsprüfung —: **`NER-EVAL-SPLIT.md`**.
+
 ### 5.3 Durchführung
 
 ```bash
 python3 scripts/eval_ner.py \
-    --dev  docs/eval/de-dev.jsonl \
-    --test docs/eval/de-test.jsonl \
+    --dev  /var/lib/sluice-eval/de-dev.jsonl \
+    --test /var/lib/sluice-eval/de-test.jsonl \
     --model urchade/gliner_multi_pii-v1 \
-    --model urchade/gliner_multi_pii-v1 \
+    --model knowledgator/gliner-pii-base-v1.0 \
     --target-recall 0.98 \
-    --json docs/eval/ergebnis.json
+    --json /var/lib/sluice-eval/ergebnis.json
 ```
 
 Ausgewiesen werden Span-Level-Metriken **getrennt nach Entitätstyp**, inklusive Recall pro

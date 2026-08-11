@@ -12,3 +12,9 @@ build/
 htmlcov/
 nohup.out
 *.swp
+
+# Evaluationsdatensätze enthalten ECHTE personenbezogene Daten
+# (docs/NER-EVAL-SPLIT.md §0). Ablage gehört ausserhalb des Checkouts;
+# dieser Eintrag faengt nur den Griff daneben.
+docs/eval/
+*.jsonl
