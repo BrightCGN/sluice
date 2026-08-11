@@ -1,3 +1,14 @@
+# ============================================================================
+# VORLAGE, kein Ausgangsbestand. Diese Datei enthält absichtlich je EIN Muster
+# pro Modus — darunter `passthrough` (fail-open) und `pii_ner` (braucht den
+# NER-Dienst). Sie 1:1 nach /etc/sluice/profiles.toml zu kopieren schaltet damit
+# Profile scharf, die niemand bewusst gewählt hat. Übernimm die Blöcke, die du
+# brauchst, und lösche den Rest.
+#
+# Die Listen-Schreibweise bei `detector_profile` braucht Code ab Spec-Rev. 13.
+# Reihenfolge beim Ausrollen: erst Code, dann Profile — nie umgekehrt.
+# ============================================================================
+
 # Irreversibel ist der Default (Rev. 9, safety first) — `mode` kann entfallen,
 # dann gilt `strict`. Verifizierende Modi (generalizing/pseudonymizing) brauchen
 # kein `allowed_modes`-Opt-in; nur fail-open-Modi (passthrough) verlangen die
@@ -46,6 +57,10 @@ egress_enabled      = true
 allowed_purposes    = ["playlist_curation"]
 provider_allowlist  = ["anthropic", "gemini"]
 detector_profile    = ["media", "pii_de"]   # Vereinigungsmenge (Rev. 13, §5.1)
+# ACHTUNG: Die Listen-Schreibweise braucht Sluice-Code ab Spec-Rev. 13. Auf einer
+# älteren Installation landet die Liste ungeprüft im Profil und das Profil crasht
+# zur Laufzeit (AttributeError statt sauberem Block). Erst Code ausrollen, dann
+# Profile umstellen — nie umgekehrt.
 dictionary_terms    = ["<haushaltsname>", "<strasse hausnr>"]  # echte Namens-/Adressliste auf der VM
 
 
