@@ -1,4 +1,10 @@
-# Sluice — systemd-Unit für die Sluice-VM (ID 8740, 192.168.87.40).
+# Sluice — systemd-Unit für die Sluice-VM.
+#
+# Die Bind-Adresse unten (192.0.2.10) ist ein PLATZHALTER aus dem
+# Dokumentationsbereich RFC 5737 — sie ist nirgends erreichbar. bootstrap.sh ersetzt
+# sie in der INSTALLIERTEN Unit durch SLUICE_BIND_HOST; von Hand installiert, gehört
+# sie vor dem ersten Start ersetzt. Eine feste Adresse steht bewusst nicht im Repo:
+# sie ist Eigenschaft der Installation, nicht der Software.
 #
 # Installation:
 #   1. Repo nach /opt/sluice, venv anlegen:  python3.11 -m venv /opt/sluice/.venv
@@ -13,7 +19,7 @@
 #                         Gateway-Services (sluice-gateway@.service, Rev. 7)
 #   4. Unit installieren: cp deploy/sluice.service /etc/systemd/system/
 #                         systemctl daemon-reload && systemctl enable --now sluice
-#   5. Prüfen:            curl http://192.168.87.40:8000/v1/health
+#   5. Prüfen:            curl http://192.0.2.10:8000/v1/health
 #
 # Fail-closed by design: ohne profiles.toml startet der Service im Default-Deny (§4.3)
 # und blockiert jeden Egress — er geht dadurch NICHT kaputt, er lässt nur nichts raus.
@@ -40,7 +46,7 @@ WorkingDirectory=/opt/sluice
 Environment=SLUICE_PROFILES=/etc/sluice/profiles.toml
 EnvironmentFile=/etc/sluice/sluice.env
 
-ExecStart=/opt/sluice/.venv/bin/uvicorn sluice.server:app --host 192.168.87.40 --port 8000
+ExecStart=/opt/sluice/.venv/bin/uvicorn sluice.server:app --host 192.0.2.10 --port 8000
 Restart=on-failure
 RestartSec=2
 

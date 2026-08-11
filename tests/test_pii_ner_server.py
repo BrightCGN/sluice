@@ -24,7 +24,7 @@ from sluice.providers import ProviderResponse
 from sluice.server import create_app
 from tests.test_pii_ner import MODEL, REVISION, ner_transport
 
-TEXT = "Richard Cochius, IBAN DE89 3704 0044 0532 0130 00"
+TEXT = "Max Mustermann, IBAN DE89 3704 0044 0532 0130 00"
 
 NER_CONFIG = NerConfig(
     url="https://ner.invalid",
@@ -114,7 +114,7 @@ async def test_beide_stufen_wirken_im_proxy_pfad(use_mocked_ner: Any) -> None:
     assert response.status_code == 200
     # Was beim Provider ankommt, trägt weder Namen noch IBAN.
     sent = adapter.calls[0][0]["content"]
-    assert "Richard Cochius" not in sent
+    assert "Max Mustermann" not in sent
     assert "DE89" not in sent
     assert "[PERSON]" in sent and "[IBAN]" in sent
 

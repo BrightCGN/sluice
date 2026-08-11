@@ -108,13 +108,13 @@ async def test_pseudonymized_output_passes_verifier() -> None:
     outcome = await guarded_egress(
         profile=AIDER,
         purpose="code_completion",
-        payload=EgressPayload(raw_text="Melde 192.168.50.21 an r.cochius@gmail.com"),
+        payload=EgressPayload(raw_text="Melde 192.0.2.21 an max.mustermann@example.com"),
         scope=Scope("s1"),
         audit=AuditLog(),
     )
     assert outcome.released is True
     assert "192.168" not in outcome.sanitized_text
-    assert "gmail" not in outcome.sanitized_text
+    assert "example.com" not in outcome.sanitized_text
     assert "⟦IP_1⟧" in outcome.sanitized_text
 
 

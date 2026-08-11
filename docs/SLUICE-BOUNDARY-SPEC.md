@@ -383,7 +383,7 @@ egress_enabled      = true
 allowed_purposes    = ["playlist_curation"]
 provider_allowlist  = ["claude", "gemini", "openai"]
 detector_profile    = ["media", "pii_de"]     # Vereinigungsmenge: NAS-Pfade UND deutsche PII (§5.1, Rev. 13)
-dictionary_terms    = ["Richard", "Musterstraße 12"]  # Namen/Adressen, die Regex nicht fängt (§5.1, Rev. 10)
+dictionary_terms    = ["Mustermann", "Musterstraße 12"]  # Namen/Adressen, die Regex nicht fängt (§5.1, Rev. 10)
 
 [profile."bank-tool"]                         # strengstes Profil (§4.4)
 mode                = "strict"                 # kein consumer-generalisierter Text: harter Modus
@@ -507,16 +507,16 @@ Eigenschaften, die dabei zählen:
 #### 5.1.1 Profil-**Wörterbuch** `dictionary_terms` (Rev. 10)
 
 Die Regex-Muster erkennen strukturierte Identifier (IP, E-Mail, Host, Pfad), **nicht** aber
-freie **Namen und Adressen** („Richard", „Musterstraße 12") — die haben keine generische Form.
+freie **Namen und Adressen** („Mustermann", „Musterstraße 12") — die haben keine generische Form.
 Genau diese Deckung leistete das `dictionary` in PrismClaws/Crates anon. Sluice zieht sie als
 **profil-deklarierte Term-Liste** ein:
 
 ```toml
-dictionary_terms = ["Richard", "Musterstraße 12", "Acme GmbH"]
+dictionary_terms = ["Mustermann", "Musterstraße 12", "Acme GmbH"]
 ```
 
 - **Matching (Engine):** jeder Term wird **literal** (regex-escaped), **wortgrenzen-gebunden**
-  und **case-insensitiv** gematcht — „Richardson" ist nicht „Richard".
+  und **case-insensitiv** gematcht — „Mustermannsen" ist nicht „Mustermann".
 - **Wirkung:** `strict` redigiert Treffer zu `[NAME]`; der Verifier führt sie als Befund und
   blockt **fail-closed in jedem Modus** (auch `generalizing`/`pseudonymizing` — der Boden gilt
   für alle, §5). Ein Modus muss die Terme nicht kennen; der Verifier fängt sie darunter.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Sluice — Provisionierung der Sluice-VM (ID 8740, 192.168.87.40).
+# Sluice — Provisionierung der Sluice-VM.
 #
 # Legt den kompletten Stack an: Kern-Service (sluice.service) + je ein eigenständiges
 # Provider-Gateway (sluice-gateway@<provider>), jedes unter eigenem System-User
@@ -33,10 +33,24 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 #   SLUICE_PROVIDERS="anthropic" bash deploy/bootstrap.sh
 PROVIDERS="${SLUICE_PROVIDERS:-anthropic openai gemini mistral}"
 
-# Bind-Adresse des Kerns. Weicht sie vom Spec-Default ab, werden die INSTALLIERTEN
-# Units/Env-Dateien angepasst (die Repo-Dateien bleiben unberührt).
-DEFAULT_HOST="192.168.87.40"
+# Bind-Adresse des Kerns. DEFAULT_HOST ist ein PLATZHALTER aus dem Dokumentationsbereich
+# RFC 5737 — er steht so in den Repo-Dateien (Unit, *.env.example) und dient nur als
+# Ersetzungsmarke: weicht BIND_HOST davon ab, werden die INSTALLIERTEN Units/Env-Dateien
+# darauf angepasst, die Repo-Dateien bleiben unberührt.
+#
+# Eine echte Adresse gehört NICHT ins Repo — sie ist Eigenschaft der Installation, nicht
+# der Software. Deshalb ist SLUICE_BIND_HOST Pflicht: ohne sie bliebe der Platzhalter
+# stehen, der Dienst könnte nicht binden und scheiterte erst beim Start mit
+# „Cannot assign requested address". Lieber hier abbrechen, mit Ansage.
+DEFAULT_HOST="192.0.2.10"
 BIND_HOST="${SLUICE_BIND_HOST:-$DEFAULT_HOST}"
+if [[ "${BIND_HOST}" == "${DEFAULT_HOST}" ]]; then
+    echo "SLUICE_BIND_HOST ist nicht gesetzt." >&2
+    echo "  Das Repo enthält nur den Platzhalter ${DEFAULT_HOST} (RFC 5737, nicht erreichbar)." >&2
+    echo "  Aufruf mit der Adresse dieser Maschine, z. B.:" >&2
+    echo "    sudo SLUICE_BIND_HOST=10.0.0.5 bash deploy/bootstrap.sh" >&2
+    exit 1
+fi
 
 # NER-Dienst (§7.5) — nur für Profile mit `mode = "pii_ner"`. Standardmäßig AUS: die
 # übrigen Modi (strict, pii_regex, generalizing, pseudonymizing, passthrough) brauchen

@@ -13,32 +13,32 @@ from sluice.policy import Profile, parse_profiles
 from sluice.modes import EgressPayload
 from sluice.verifier import redact_identifiers, verify_no_identifiers
 
-TERMS = ("Richard", "Musterstraße 12")
+TERMS = ("Mustermann", "Musterstraße 12")
 
 
 # ---------- Engine-Ebene (verifier) ----------
 
 
 def test_verify_blocks_dictionary_term() -> None:
-    # "Richard" fängt kein Regex-Muster — nur das Wörterbuch.
-    result = verify_no_identifiers("Party bei Richard", "media", dictionary_terms=TERMS)
+    # "Mustermann" fängt kein Regex-Muster — nur das Wörterbuch.
+    result = verify_no_identifiers("Party bei Mustermann", "media", dictionary_terms=TERMS)
     assert result.clean is False
     assert any("Wörterbuch-Term" in f for f in result.findings)
 
 
 def test_verify_case_insensitive_and_word_bounded() -> None:
-    assert verify_no_identifiers("PARTY BEI RICHARD", "media", dictionary_terms=TERMS).clean is False
-    # Wortgrenze: "Richardson" ist NICHT der Term "Richard".
-    assert verify_no_identifiers("DJ Richardson legt auf", "media", dictionary_terms=TERMS).clean is True
+    assert verify_no_identifiers("PARTY BEI MUSTERMANN", "media", dictionary_terms=TERMS).clean is False
+    # Wortgrenze: "Mustermannson" ist NICHT der Term "Mustermann".
+    assert verify_no_identifiers("DJ Mustermannson legt auf", "media", dictionary_terms=TERMS).clean is True
 
 
 def test_verify_without_terms_is_backward_compatible() -> None:
-    assert verify_no_identifiers("Party bei Richard", "media").clean is True
+    assert verify_no_identifiers("Party bei Mustermann", "media").clean is True
 
 
 def test_redact_replaces_dictionary_term() -> None:
-    out = redact_identifiers("Party bei Richard in Musterstraße 12", "media", dictionary_terms=TERMS)
-    assert "Richard" not in out
+    out = redact_identifiers("Party bei Mustermann in Musterstraße 12", "media", dictionary_terms=TERMS)
+    assert "Mustermann" not in out
     assert "Musterstraße 12" not in out
     assert out.count("[NAME]") == 2
 
@@ -65,11 +65,11 @@ async def test_strict_redacts_dictionary_term_end_to_end() -> None:
     outcome = await guarded_egress(
         profile=STRICT,
         purpose="playlist_curation",
-        payload=EgressPayload(raw_text="90er-Party bei Richard"),
+        payload=EgressPayload(raw_text="90er-Party bei Mustermann"),
         audit=AuditLog(),
     )
     assert outcome.released is True
-    assert "Richard" not in outcome.sanitized_text
+    assert "Mustermann" not in outcome.sanitized_text
     assert "[NAME]" in outcome.sanitized_text
 
 
@@ -78,7 +78,7 @@ async def test_generalizing_blocks_dictionary_term_fail_closed() -> None:
     outcome = await guarded_egress(
         profile=GENERALIZING,
         purpose="x",
-        payload=EgressPayload(raw_text="Party bei Richard", generalized_text="Party bei Richard"),
+        payload=EgressPayload(raw_text="Party bei Mustermann", generalized_text="Party bei Mustermann"),
         audit=AuditLog(),
     )
     assert outcome.released is False
@@ -91,9 +91,9 @@ async def test_generalizing_blocks_dictionary_term_fail_closed() -> None:
 def test_parse_dictionary_terms() -> None:
     profiles = parse_profiles(
         '[profile."crate"]\nmode = "strict"\ndetector_profile = "media"\n'
-        'dictionary_terms = ["Richard", "Musterstraße 12"]\n'
+        'dictionary_terms = ["Mustermann", "Musterstraße 12"]\n'
     )
-    assert profiles["crate"].dictionary_terms == ("Richard", "Musterstraße 12")
+    assert profiles["crate"].dictionary_terms == ("Mustermann", "Musterstraße 12")
 
 
 def test_dictionary_terms_default_empty() -> None:

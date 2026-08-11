@@ -58,10 +58,10 @@ def test_reihenfolge_der_eingabe_aendert_das_ergebnis_nicht() -> None:
 
 
 def test_apply_spans_ersetzt_von_rechts_nach_links() -> None:
-    text = "Konto DE89370400440532013000 von Richard Cochius"
+    text = "Konto DE89370400440532013000 von Max Mustermann"
     spans = [
         regex_span(6, 28),
-        ner_span(33, 48),
+        ner_span(33, 47),
     ]
     assert apply_spans(text, merge_spans([spans[0]], [spans[1]])) == "Konto [IBAN] von [PERSON]"
 

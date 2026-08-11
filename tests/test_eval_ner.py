@@ -25,7 +25,7 @@ sys.modules["eval_ner"] = eval_ner
 _spec.loader.exec_module(eval_ner)
 
 LABELS = ("person", "organization")
-TEXT = "Richard Cochius arbeitet bei Acme GmbH"
+TEXT = "Max Mustermann arbeitet bei Acme GmbH"
 
 
 class ScriptedEngine:

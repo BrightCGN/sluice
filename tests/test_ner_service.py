@@ -13,7 +13,7 @@ import httpx
 from sluice.ner import NerSpan, ServiceInfo
 from sluice.ner.service import create_ner_app
 
-TEXT = "Richard Cochius wohnt in Köln und arbeitet bei Acme GmbH."
+TEXT = "Max Mustermann wohnt in Köln und arbeitet bei Acme GmbH."
 
 
 class FakeEngine:
@@ -35,7 +35,7 @@ class FakeEngine:
     def detect(self, text: str, labels: tuple[str, ...]) -> list[NerSpan]:
         self.calls.append((text, labels))
         return [
-            NerSpan(start=0, end=15, label="person", score=0.93),
+            NerSpan(start=0, end=14, label="person", score=0.93),
             NerSpan(start=47, end=56, label="organization", score=0.71),
         ]
 
@@ -73,9 +73,9 @@ async def test_detect_liefert_zeichen_offsets() -> None:
         )
         assert response.status_code == 200
         spans = response.json()["spans"]
-        assert spans[0] == {"start": 0, "end": 15, "label": "person", "score": 0.93}
+        assert spans[0] == {"start": 0, "end": 14, "label": "person", "score": 0.93}
         # Zeichen-Offsets, keine Token-Offsets (§7.5): sie müssen in den Originaltext passen.
-        assert TEXT[spans[0]["start"] : spans[0]["end"]] == "Richard Cochius"
+        assert TEXT[spans[0]["start"] : spans[0]["end"]] == "Max Mustermann"
 
 
 async def test_dienst_enthaelt_keine_anonymisierungslogik() -> None:
@@ -94,7 +94,7 @@ async def test_dienst_enthaelt_keine_anonymisierungslogik() -> None:
     for placeholder in ("[PERSON]", "[ORGANISATION]", "[IBAN]", "[NAME]"):
         assert placeholder not in serialized
     # Der Originaltext taucht nirgends maskiert oder ersetzt wieder auf.
-    assert "Richard" not in serialized
+    assert "Mustermann" not in serialized
 
 
 async def test_labels_kommen_zur_laufzeit_vom_aufrufer() -> None:

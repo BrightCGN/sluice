@@ -79,10 +79,21 @@ konfigurierbares Audit). **Rev. 12** ergänzt die zweistufige PII-Erkennung
 (`pii_regex`/`pii_ner`), den eigenständigen NER-Dienst (§7.5) und die
 Anonymisierungs-Identität (§5.4).
 
-Auf der Sluice-VM ausgerollt sind Kern und Provider-Gateways. Der NER-Dienst ist
-**noch nicht in Betrieb**: die Latenzmessung (2026-08-11) liegt vor, die Modellwahl
-und die Schwellwert-Kalibrierung stehen aus — beides braucht einen deutschsprachigen
-Evaluationsdatensatz. Details und offene Punkte: `docs/NER-SERVICE.md` §9.
+Auf der Sluice-VM ausgerollt sind Kern und Provider-Gateways. Der NER-Dienst läuft
+seit 2026-08-11 mit `urchade/gliner_multi_pii-v1` (Revision gepinnt, Offsets nach
+§4.1 geprüft). **Produktiv genutzt wird er noch nicht:** kein Profil wählt bisher
+`pii_ner`, weil die Schwellwert-Kalibrierung aussteht — die braucht einen
+deutschsprachigen Dev/Test-Split (`docs/NER-EVAL-SPLIT.md`). Details und offene
+Punkte: `docs/NER-SERVICE.md` §9.
 
 Offen (§10): Open-Source-Split (generischer Kern öffentlich, Homelab-/Konsumenten-Details
-privat), öffentliches Modus-Plugin-API, Lizenzwahl.
+privat), öffentliches Modus-Plugin-API.
+
+## Lizenz
+
+Apache-2.0 — siehe [`LICENSE`](LICENSE). Copyright 2026 Richard Cochius.
+
+Die Wahl folgt dem Erweiterungspunkt: Modi sind eine Registry, in die Dritte eigene
+Modi eintragen (§3). Eine Lizenz, die genau das verbietet, würde dem Entwurf
+widersprechen. Apache-2.0 bringt zusätzlich eine ausdrückliche Patentklausel mit —
+für ein Werkzeug, das an einer Sicherheitsgrenze sitzt, der ruhigere Weg.

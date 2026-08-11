@@ -173,14 +173,14 @@ async def test_remote_gateway_complete_forwards_and_sends_token() -> None:
 
     adapter = RemoteGatewayAdapter(
         provider="anthropic",
-        base_url="http://192.168.87.40:17890",
+        base_url="http://192.0.2.10:17890",
         token="s3cret",
         http_client=_client(handler),
     )
     resp = await adapter.complete(MESSAGES, model="claude-sonnet-5")
     assert resp.text == "Hallo zurück"
     assert resp.provider == "anthropic"
-    assert seen["url"] == "http://192.168.87.40:17890/v1/complete"
+    assert seen["url"] == "http://192.0.2.10:17890/v1/complete"
     assert seen["token"] == "s3cret"
     assert seen["body"]["messages"] == MESSAGES
 
@@ -220,7 +220,7 @@ def test_select_egress_adapter_requires_gateway(
     from sluice.providers import select_egress_adapter
     from sluice.providers.remote import RemoteGatewayAdapter
 
-    monkeypatch.setenv("SLUICE_GATEWAY_ANTHROPIC_URL", "http://192.168.87.40:17890")
+    monkeypatch.setenv("SLUICE_GATEWAY_ANTHROPIC_URL", "http://192.0.2.10:17890")
     adapter = select_egress_adapter("claude")  # Alias → kanonisch "anthropic"
     assert isinstance(adapter, RemoteGatewayAdapter)
     assert adapter.name == "anthropic"

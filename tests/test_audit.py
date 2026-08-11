@@ -10,7 +10,7 @@ _KW = dict(
     mode="strict",
     released=True,
     reason="clean",
-    before="192.168.1.1 roh",
+    before="192.0.2.1 roh",
     after="[IP] roh",
     provider_target="claude",
 )
@@ -35,7 +35,7 @@ def test_full_level_keeps_payload() -> None:
     audit = AuditLog(level="full")
     audit.append(**_KW)
     entry = audit.entries[0]
-    assert entry.before == "192.168.1.1 roh"
+    assert entry.before == "192.0.2.1 roh"
     assert entry.after == "[IP] roh"
 
 

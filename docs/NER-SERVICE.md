@@ -124,7 +124,7 @@ wo auch der Vorrang der Regex-Stufe entschieden wird.
 
 #### Messung auf der Ziel-VM, 2026-08-11 — maßgeblich
 
-Zwei unabhängige Läufe auf `sluicegw` selbst, dazwischen eine Tuning-Runde am
+Zwei unabhängige Läufe auf der Ziel-VM selbst, dazwischen eine Tuning-Runde am
 Proxmox-Host. Modell `urchade/gliner_multi_pii-v1` (mDeBERTa-v3-base, ~278M),
 PyTorch 2.13.0+cpu, fp32, ein Thread, Median aus 5 Läufen nach 2 Warmläufen:
 
@@ -155,7 +155,7 @@ zulässig, weil beide auf derselben Vektor-ISA-Stufe liegen — und weil das Des
 Inferenz ohnehin auf **einen** Thread festnagelt (§5.4), sodass die Kernzahl für einen
 einzelnen Request keine Rolle spielt.
 
-| | Messmaschine | Ziel-VM `sluicegw` |
+| | Messmaschine | Ziel-VM |
 |---|---|---|
 | CPU | Intel i5-2410M, Sandy Bridge | Intel Xeon E3-1270 V2, Ivy Bridge |
 | Takt | 2,30 GHz | 3,50 GHz |
@@ -354,7 +354,7 @@ Anwendungsfeld** — generische Benchmarks überschätzen den Recall auf Haushal
 Kanzleitexten regelmäßig. Format (JSONL):
 
 ```json
-{"text": "Richard Cochius wohnt in Köln.", "spans": [{"start": 0, "end": 15, "label": "person"}]}
+{"text": "Max Mustermann wohnt in Köln.", "spans": [{"start": 0, "end": 14, "label": "person"}]}
 ```
 
 Zwei getrennte Splits: **`dev` zum Kalibrieren, `test` zum Berichten.** Auf demselben

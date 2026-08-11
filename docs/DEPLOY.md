@@ -1,8 +1,20 @@
 # Sluice — Installation & Betrieb auf der Sluice-VM
 
-> **Zielsystem:** eigene VM, ID **8740**, IP **192.168.87.40**, Port **8000**.
+> **Zielsystem:** eigene VM, Port **8000**.
 > **Bezug:** `SLUICE-BOUNDARY-SPEC.md` (Spec, Wahrheitsquelle) — §-Verweise unten zeigen dorthin.
 > Getestet gegen Debian 12 / Ubuntu 24.04; jede Distribution mit Python ≥ 3.11 funktioniert.
+
+> **`${SLUICE_HOST}` in diesem Dokument** ist die Adresse **deiner** Sluice-VM — überall
+> dort, wo unten `${SLUICE_HOST}` steht, ist sie gemeint. Setz sie einmal in der Shell,
+> dann sind die Befehle kopierbar:
+>
+> ```bash
+> export SLUICE_HOST=192.0.2.10      # ← eigene Adresse eintragen
+> ```
+>
+> Dieselbe Adresse braucht `bootstrap.sh` als `SLUICE_BIND_HOST` (§0.1) — das Skript
+> bricht ab, solange sie nicht gesetzt ist. Eine feste Adresse steht bewusst **nirgends**
+> im Repo: die Bind-Adresse ist Eigenschaft deiner Installation, nicht der Software.
 
 Sluice ist die eine Sanitisierungs-Boundary (§1): **alle** Projekte sprechen diese VM an,
 nur diese VM spricht die KI-Provider. Die Installation ist bewusst zustandsarm — der Service
@@ -22,7 +34,7 @@ jeder Egress zu diesem Provider ein Konfigurationsfehler, fail-closed.
 Konsumenten (Temper, Aider, Crate, …)          Provider (nur von den Gateways erreichbar)
         │  HTTP :8000 (/v1/…)                       ▲  HTTPS :443
         ▼                                           │
-┌─────────────────────────── VM 8740 · 192.168.87.40 ───────────────────────────┐
+┌───────────────────────── Sluice-VM · ${SLUICE_HOST} ──────────────────────────┐
 │  systemd: sluice.service (Kern — keine Provider-Keys)                         │
 │    └─ uvicorn sluice.server:app  (User: sluice, gehärtet, fail-closed)        │
 │  systemd: sluice-gateway@<provider>  (je Provider, Ports ab 17890, §5.1)      │
@@ -64,7 +76,7 @@ sudo SLUICE_WITH_NER=1 bash deploy/bootstrap.sh    # zusätzlich der NER-Dienst 
 | Variable | Default | Wirkung |
 |---|---|---|
 | `SLUICE_PROVIDERS` | `anthropic openai gemini mistral` | Welche Gateways auf **dieser** Maschine laufen — beim Umzug eines Gateways dort nur den einen Provider setzen |
-| `SLUICE_BIND_HOST` | `192.168.87.40` | Bind-Adresse des Kerns; passt die *installierten* Units/Envs an, die Repo-Dateien bleiben unberührt |
+| `SLUICE_BIND_HOST` | *keiner* — **Pflicht** | Bind-Adresse des Kerns; passt die *installierten* Units/Envs an, die Repo-Dateien bleiben unberührt. Ohne diese Variable bricht das Skript ab: im Repo steht nur der Platzhalter `192.0.2.10` (RFC 5737), der nirgends erreichbar ist |
 | `SLUICE_WITH_NER` | `0` (aus) | Legt User `sluice-ner`, `models/`, `ner.env` und `sluice-ner.service` an und installiert das Modell-Extra |
 | `SLUICE_NER_EXTRA` | `ner` (torch) | Alternativ `ner-onnx` / `ner-onnx-gpu` — **erst nach der Messung** wählen (§5.2) |
 
@@ -86,7 +98,7 @@ liest weiter; die folgenden Abschnitte sind das manuelle Äquivalent.
   die Erkennung ist CPU-gebunden. Wie viel es konkret braucht, ist eine Messung, keine
   Schätzung — `scripts/probe_ner_hardware.py` vor der Dimensionierung laufen lassen.
   Rechne zusätzlich mit einigen GB Plattenplatz für venv (torch) und Modell-Cache.
-- Statische IP `192.168.87.40` konfiguriert.
+- Statische IP `${SLUICE_HOST}` konfiguriert.
 - Ausgehend HTTPS (443) zu den Provider-APIs erlaubt (Liste in Schritt 6).
 - Zugriff auf das Repo `github.com/BrightCGN/sluice` (Deploy-Key oder `scp` vom Arbeitsrechner).
 
@@ -133,7 +145,7 @@ sudo git clone https://github.com/BrightCGN/sluice.git /opt/sluice
 
 ```bash
 # auf dem Arbeitsrechner:
-rsync -a --exclude .venv --exclude .git ~/git/sluice/ root@192.168.87.40:/opt/sluice/
+rsync -a --exclude .venv --exclude .git ~/git/sluice/ root@${SLUICE_HOST}:/opt/sluice/
 ```
 
 > **`--exclude .venv` ist nicht kosmetisch.** Ein venv ist **nicht verschiebbar**: die
@@ -221,7 +233,7 @@ egress_enabled      = true
 allowed_purposes    = ["playlist_curation"]
 provider_allowlist  = ["anthropic", "gemini"]
 detector_profile    = "media"
-dictionary_terms    = ["Richard", "Musterstraße 12"]
+dictionary_terms    = ["Mustermann", "Musterstraße 12"]
 ```
 
 ```bash
@@ -246,10 +258,10 @@ pro genutztem Provider dessen Gateway-URL. Der Kern hält **keine** Provider-Key
 liegen nur bei den Gateways (Schritt 5.1). Vorlage: `deploy/sluice.env.example`.
 
 ```bash
-SLUICE_GATEWAY_ANTHROPIC_URL=http://192.168.87.40:17890
-SLUICE_GATEWAY_OPENAI_URL=http://192.168.87.40:17891
-SLUICE_GATEWAY_GEMINI_URL=http://192.168.87.40:17892
-SLUICE_GATEWAY_MISTRAL_URL=http://192.168.87.40:17893
+SLUICE_GATEWAY_ANTHROPIC_URL=http://${SLUICE_HOST}:17890
+SLUICE_GATEWAY_OPENAI_URL=http://${SLUICE_HOST}:17891
+SLUICE_GATEWAY_GEMINI_URL=http://${SLUICE_HOST}:17892
+SLUICE_GATEWAY_MISTRAL_URL=http://${SLUICE_HOST}:17893
 # optional, muss dann auch in jeder gateway-<provider>.env stehen:
 # SLUICE_GATEWAY_TOKEN=…
 # Audit-Detailgrad (Rev. 9, §6) — Betreiber-Entscheidung: off | metadata | full.
@@ -334,7 +346,7 @@ sudo systemctl enable --now sluice
 systemctl status sluice
 ```
 
-Die Unit bindet an `192.168.87.40:8000`, startet bei Fehlern neu und läuft mit vollem
+Die Unit bindet an `${SLUICE_HOST}:8000`, startet bei Fehlern neu und läuft mit vollem
 Sandbox-Härtungsblock (kein root, keine Capabilities, `ProtectSystem=strict`,
 Syscall-Filter). Details und Kommentare: `deploy/sluice.service`.
 
@@ -387,7 +399,7 @@ Eigenschaften:
   `SLUICE_HOST` in dessen `gateway-<provider>.env` und die `SLUICE_GATEWAY_<P>_URL`
   in der `sluice.env` des Kerns — sonst nichts.
 
-**Installation der Gateways** (zunächst auf derselben VM 8740; User aus Schritt 2):
+**Installation der Gateways** (zunächst auf derselben VM wie der Kern; User aus Schritt 2):
 
 ```bash
 sudo cp /opt/sluice/deploy/sluice-gateway@.service /etc/systemd/system/
@@ -405,16 +417,16 @@ sudo systemctl enable --now sluice-gateway@anthropic sluice-gateway@openai \
 **Kern auf die Gateways zeigen lassen** — in `/etc/sluice/sluice.env` (statt der Keys):
 
 ```bash
-SLUICE_GATEWAY_ANTHROPIC_URL=http://192.168.87.40:17890
-SLUICE_GATEWAY_OPENAI_URL=http://192.168.87.40:17891
-SLUICE_GATEWAY_GEMINI_URL=http://192.168.87.40:17892
-SLUICE_GATEWAY_MISTRAL_URL=http://192.168.87.40:17893
+SLUICE_GATEWAY_ANTHROPIC_URL=http://${SLUICE_HOST}:17890
+SLUICE_GATEWAY_OPENAI_URL=http://${SLUICE_HOST}:17891
+SLUICE_GATEWAY_GEMINI_URL=http://${SLUICE_HOST}:17892
+SLUICE_GATEWAY_MISTRAL_URL=http://${SLUICE_HOST}:17893
 ```
 
 Danach `sudo systemctl restart sluice`. Prüfen:
 
 ```bash
-curl -s http://192.168.87.40:17890/v1/health
+curl -s http://${SLUICE_HOST}:17890/v1/health
 # → {"status":"ok","provider":"anthropic"}
 ```
 
@@ -526,7 +538,7 @@ Netzwerkseitig wird der technische Egress-Riegel (§1) erst rund: **nur** diese 
 Provider-APIs hinaus, und hinein darf nur der Perimeter.
 
 Eingehend:
-- TCP `8000` **nur** aus dem internen Netz der Konsumenten (z. B. `192.168.87.0/24`).
+- TCP `8000` **nur** aus dem internen Netz der Konsumenten (`<konsumenten-netz>`, z. B. `10.0.0.0/24`).
 - NER-Port `17900` **nur** von der IP des Sluice-Kerns — der Dienst sieht **Rohtext**,
   für ihn gilt dieselbe Netz-Regel wie für den Kern, nicht die lockere eines Hilfsdienstes.
   Ausgehend braucht er **nichts** (kein Egress); nur einmalig 443 zum Modell-Download, das
@@ -558,25 +570,25 @@ Beispiel mit ufw:
 
 ```bash
 sudo ufw default deny incoming
-sudo ufw allow from 192.168.87.0/24 to any port 8000 proto tcp
+sudo ufw allow from <konsumenten-netz> to any port 8000 proto tcp
 sudo ufw allow from <admin-netz> to any port 22 proto tcp
 sudo ufw enable
 ```
 
 Auf dem **Hypervisor/Router** zusätzlich: ausgehendes 443 zu den vier Hosts nur für
-`192.168.87.40` erlauben, für alle anderen internen Maschinen sperren — dann ist Sluice
+`${SLUICE_HOST}` erlauben, für alle anderen internen Maschinen sperren — dann ist Sluice
 auch technisch der einzige Weg nach draußen.
 
 ---
 
 ## 7. Verifikation (Abnahme-Checkliste)
 
-Alle Aufrufe von einem Konsumenten-Host aus (`192.168.87.x`):
+Alle Aufrufe von einem Konsumenten-Host aus:
 
 **7.1 Health:**
 
 ```bash
-curl -s http://192.168.87.40:8000/v1/health
+curl -s http://${SLUICE_HOST}:8000/v1/health
 # → {"status":"ok","profiles":2,"provider_lock":null}
 #   Zahl = geladene Profile; 0 heißt: profiles.toml prüfen!
 #   provider_lock: null bei der Sammel-Instanz, Provider-Name bei Gateway-Instanzen (§5.1)
@@ -585,7 +597,7 @@ curl -s http://192.168.87.40:8000/v1/health
 **7.2 Guard-Endpoint (§7.1) — sauberer Text geht durch:**
 
 ```bash
-curl -s -X POST http://192.168.87.40:8000/v1/egress/guard \
+curl -s -X POST http://${SLUICE_HOST}:8000/v1/egress/guard \
   -H 'content-type: application/json' \
   -d '{"profile":"temper","purpose":"external_escalation",
        "raw_text":"db-prod-3 OOM","generalized_text":"Ein Server meldet Speicherdruck"}'
@@ -595,7 +607,7 @@ curl -s -X POST http://192.168.87.40:8000/v1/egress/guard \
 **7.3 Verifier blockt (der Riegel funktioniert):**
 
 ```bash
-curl -s -X POST http://192.168.87.40:8000/v1/egress/guard \
+curl -s -X POST http://${SLUICE_HOST}:8000/v1/egress/guard \
   -H 'content-type: application/json' \
   -d '{"profile":"temper","purpose":"external_escalation",
        "raw_text":"x","generalized_text":"Host 10.0.0.5 down"}'
@@ -606,7 +618,7 @@ curl -s -X POST http://192.168.87.40:8000/v1/egress/guard \
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' -X POST \
-  http://192.168.87.40:8000/v1/chat/completions \
+  http://${SLUICE_HOST}:8000/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{"messages":[{"role":"user","content":"hi"}],"model":"claude-sonnet-5"}'
 # → 403
@@ -615,7 +627,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST \
 **7.5 Voll-Proxy mit echtem Provider (§7.2, benötigt laufendes Gateway mit gültigem Key):**
 
 ```bash
-curl -s -X POST http://192.168.87.40:8000/v1/chat/completions \
+curl -s -X POST http://${SLUICE_HOST}:8000/v1/chat/completions \
   -H 'content-type: application/json' \
   -H 'X-Sluice-Profile: aider-code' \
   -H 'X-Sluice-Scope: abnahme-test-1' \
@@ -637,7 +649,7 @@ curl -s http://127.0.0.1:17900/v1/info
 Dann der Weg durch den Kern, mit einem `pii_ner`-Profil:
 
 ```bash
-curl -s -X POST http://192.168.87.40:8000/v1/egress/guard \
+curl -s -X POST http://${SLUICE_HOST}:8000/v1/egress/guard \
   -H 'content-type: application/json' \
   -d '{"profile":"<pii-ner-profil>","purpose":"<erlaubter-purpose>",
        "raw_text":"Bitte an Anna Schmidt, Musterweg 3, weiterleiten.",
@@ -651,7 +663,7 @@ wird. NER-Dienst stoppen, denselben Request wiederholen:
 ```bash
 sudo systemctl stop sluice-ner
 curl -s -o /dev/null -w '%{http_code}\n' -X POST \
-  http://192.168.87.40:8000/v1/egress/guard -H 'content-type: application/json' \
+  http://${SLUICE_HOST}:8000/v1/egress/guard -H 'content-type: application/json' \
   -d '{"profile":"<pii-ner-profil>","purpose":"<erlaubter-purpose>",
        "raw_text":"x","generalized_text":"x"}'
 # → 503   (sluice_mode_unavailable — NICHT 200 mit Regex-Ergebnis)
@@ -688,7 +700,7 @@ fällt er aber nicht auf, weil der Konsument nur ein 503 sieht.
 cd /opt/sluice
 sudo -u sluice git pull                       # bzw. rsync wie in Schritt 3B
 sudo systemctl restart sluice
-curl -s http://192.168.87.40:8000/v1/health   # Abnahme 7.1 wiederholen
+curl -s http://${SLUICE_HOST}:8000/v1/health   # Abnahme 7.1 wiederholen
 ```
 
 Durch die editierbare Installation (Schritt 3) ist der neue Code mit dem Kopieren bereits

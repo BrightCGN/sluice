@@ -34,12 +34,12 @@ async def test_strict_auto_redacts_and_releases() -> None:
     outcome = await guarded_egress(
         profile=STRICT,
         purpose="x",
-        payload=EgressPayload(raw_text="Melde 192.168.50.21 an r.cochius@gmail.com"),
+        payload=EgressPayload(raw_text="Melde 192.0.2.21 an max.mustermann@example.com"),
         audit=AuditLog(),
     )
     assert outcome.released is True
-    assert "192.168.50.21" not in outcome.sanitized_text
-    assert "gmail" not in outcome.sanitized_text
+    assert "192.0.2.21" not in outcome.sanitized_text
+    assert "example.com" not in outcome.sanitized_text
     assert "[IP]" in outcome.sanitized_text
     assert "[EMAIL]" in outcome.sanitized_text
 
@@ -63,14 +63,14 @@ async def test_strict_redacts_proxy_messages() -> None:
         profile=STRICT,
         purpose="x",
         payload=EgressPayload(
-            raw_text="192.168.1.1",
-            messages=[{"role": "user", "content": "ping 192.168.1.1"}],
+            raw_text="192.0.2.1",
+            messages=[{"role": "user", "content": "ping 192.0.2.1"}],
         ),
         audit=AuditLog(),
     )
     assert outcome.released is True
     assert outcome.sanitized_messages is not None
-    assert "192.168.1.1" not in outcome.sanitized_messages[0]["content"]
+    assert "192.0.2.1" not in outcome.sanitized_messages[0]["content"]
     assert "[IP]" in outcome.sanitized_messages[0]["content"]
 
 
@@ -78,7 +78,7 @@ async def test_strict_redacts_proxy_messages() -> None:
 
 
 async def test_passthrough_lets_raw_through_unverified() -> None:
-    raw = "Melde 192.168.50.21 an r.cochius@gmail.com"
+    raw = "Melde 192.0.2.21 an max.mustermann@example.com"
     outcome = await guarded_egress(
         profile=PASS,
         purpose="x",
@@ -95,7 +95,7 @@ async def test_passthrough_still_obeys_profile_gate() -> None:
     outcome = await guarded_egress(
         profile=sovereign,
         purpose="x",
-        payload=EgressPayload(raw_text="192.168.1.1"),
+        payload=EgressPayload(raw_text="192.0.2.1"),
         audit=AuditLog(),
     )
     assert outcome.released is False
@@ -106,7 +106,7 @@ async def test_passthrough_never_default_no_profile_denies() -> None:
     outcome = await guarded_egress(
         profile=None,
         purpose="x",
-        payload=EgressPayload(raw_text="192.168.1.1"),
+        payload=EgressPayload(raw_text="192.0.2.1"),
         audit=AuditLog(),
     )
     assert outcome.released is False
@@ -125,7 +125,7 @@ async def test_allowed_modes_blocks_forbidden_mode() -> None:
     outcome = await guarded_egress(
         profile=locked,
         purpose="x",
-        payload=EgressPayload(raw_text="192.168.1.1"),
+        payload=EgressPayload(raw_text="192.0.2.1"),
         audit=AuditLog(),
     )
     assert outcome.released is False
@@ -161,7 +161,7 @@ async def test_passthrough_needs_explicit_opt_in() -> None:
     outcome = await guarded_egress(
         profile=forgot,
         purpose="x",
-        payload=EgressPayload(raw_text="192.168.1.1"),
+        payload=EgressPayload(raw_text="192.0.2.1"),
         audit=AuditLog(),
     )
     assert outcome.released is False

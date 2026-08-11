@@ -19,7 +19,7 @@ from sluice.verifier import verify_no_identifiers
         "Node 10.0.3.14 zeigt Merge-Throttling",  # IP
         "Kontakt admin@kunde-bank.de bei Fragen",  # E-Mail
         "Host es-prod-01.corp.internal überlastet",  # interner Hostname
-        "Config unter /home/richard/elastic.yml",  # Benutzer-Pfad
+        "Config unter /home/mmustermann/elastic.yml",  # Benutzer-Pfad
         "api_key = sk-supersecret123",  # Secret
     ],
 )

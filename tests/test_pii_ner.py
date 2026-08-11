@@ -26,9 +26,9 @@ from sluice.policy import Profile, parse_profiles
 MODEL = "urchade/gliner_multi_pii-v1"
 REVISION = "a1b2c3d4e5f6"
 
-# „Richard Cochius" ist für die Regex-Stufe unsichtbar (freier Name ohne feste Form) —
+# „Max Mustermann" ist für die Regex-Stufe unsichtbar (freier Name ohne feste Form) —
 # genau die Lücke, die die NER-Stufe schließt (§5.3).
-TEXT = "Richard Cochius, IBAN DE89 3704 0044 0532 0130 00, Acme GmbH in Köln"
+TEXT = "Max Mustermann, IBAN DE89 3704 0044 0532 0130 00, Acme GmbH in Köln"
 NAME_START, NAME_END = 0, 15
 ORG_START, ORG_END = TEXT.index("Acme GmbH"), TEXT.index("Acme GmbH") + len("Acme GmbH")
 
@@ -140,7 +140,7 @@ async def test_regex_hat_vorrang_bei_ueberlappung() -> None:
 
 async def test_redaktion_ersetzt_beide_stufen() -> None:
     sanitized = await make_mode().forward(EgressPayload(raw_text=TEXT), None)
-    assert "Richard Cochius" not in sanitized.text
+    assert "Max Mustermann" not in sanitized.text
     assert "DE89" not in sanitized.text
     assert "Acme GmbH" not in sanitized.text
     assert "[PERSON]" in sanitized.text and "[IBAN]" in sanitized.text
@@ -401,7 +401,7 @@ def test_entfernter_dienst_ueber_https_ist_frei(monkeypatch: pytest.MonkeyPatch)
     from sluice.ner.client import resolve_url
 
     monkeypatch.delenv("SLUICE_NER_ALLOW_PLAINTEXT_REMOTE", raising=False)
-    url = "https://192.168.101.166:17900"
+    url = "https://192.0.2.20:17900"
     assert resolve_url(NerConfig(url=url)) == url
 
 
@@ -412,7 +412,7 @@ def test_entfernter_dienst_ueber_klartext_http_blockiert(
 
     monkeypatch.delenv("SLUICE_NER_ALLOW_PLAINTEXT_REMOTE", raising=False)
     with pytest.raises(NerUnavailableError, match="Rohtext"):
-        resolve_url(NerConfig(url="http://192.168.101.166:17900"))
+        resolve_url(NerConfig(url="http://192.0.2.20:17900"))
 
 
 def test_klartext_transport_nach_ausdruecklichem_opt_in(
@@ -422,7 +422,7 @@ def test_klartext_transport_nach_ausdruecklichem_opt_in(
     from sluice.ner.client import resolve_url
 
     monkeypatch.setenv("SLUICE_NER_ALLOW_PLAINTEXT_REMOTE", "1")
-    url = "http://192.168.101.166:17900"
+    url = "http://192.0.2.20:17900"
     assert resolve_url(NerConfig(url=url)) == url
 
 
@@ -438,7 +438,7 @@ async def test_blockierter_transport_ist_ein_modus_ausfall(
     )
     mode = PiiNerMode(
         detector_profile="pii_de",
-        ner_config=NerConfig(url="http://192.168.101.166:17900"),
+        ner_config=NerConfig(url="http://192.0.2.20:17900"),
     )
     outcome = await guarded_egress(
         profile=profile,

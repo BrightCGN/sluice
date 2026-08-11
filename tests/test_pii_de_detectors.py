@@ -73,7 +73,7 @@ def test_alle_geforderten_typen_werden_erkannt() -> None:
     text = (
         "IBAN DE89 3704 0044 0532 0130 00, Steuer-ID 86095742719, "
         "SVNR 65170839J003, KVNR A123456780, Karte 4111 1111 1111 1111, "
-        "Mail r.cochius@gmail.com, IPv4 192.168.50.21, "
+        "Mail max.mustermann@example.com, IPv4 192.0.2.21, "
         "IPv6 2001:0db8:85a3::8a2e:0370:7334, MAC 00:1B:44:11:3A:B7, "
         "KFZ K-AB 1234, Telefon 0221 4710815"
     )
@@ -105,6 +105,6 @@ def test_ungueltige_pruefsummen_erzeugen_keinen_span() -> None:
 
 
 def test_spans_sind_offsets_in_den_originaltext() -> None:
-    text = "Bitte an r.cochius@gmail.com senden"
+    text = "Bitte an max.mustermann@example.com senden"
     (span,) = [s for s in detect_regex_spans(text, "pii_de") if s.label == "[EMAIL]"]
-    assert text[span.start : span.end] == "r.cochius@gmail.com"
+    assert text[span.start : span.end] == "max.mustermann@example.com"
