@@ -186,12 +186,34 @@ Zusätzlich: die VM hat **1 vCPU**, den sich Sluice-Kern, vier Gateway-Prozesse 
 NER-Dienst teilen. Während einer Inferenz ist der Kern belegt — es warten nicht nur der
 eigene Request, sondern alle parallelen.
 
-#### Was daran noch zu drehen wäre
+#### ONNX Runtime: gemessen am 2026-08-11 — und INT8 ist der falsche Weg
 
-1. **ONNX Runtime + INT8** (`knowledgator/gliner-pii-base-v1.0` hat fertige Exporte).
-   Auf CPU üblich Faktor 2–4; ohne AVX2/VNNI realistisch eher 1,5–2,5. Damit bliebe man
-   bei 4.000 Zeichen im Bereich mehrerer Sekunden. **Ungemessen** — der nächste Schritt,
-   falls die VM-Variante trotzdem verfolgt werden soll.
+`knowledgator/gliner-pii-base-v1.0`, drei Exporte, dieselbe VM, gleiche Methode:
+
+| Eingabelänge | torch fp32 (`urchade`, ~278M) | **ONNX fp32** | ONNX quint8 |
+|---|---|---|---|
+| 200 Zeichen | 1.243 ms | **173 ms** | 204 ms |
+| 1.000 Zeichen | 3.836 ms | **826 ms** | 990 ms |
+| 4.000 Zeichen | 8.598 ms | **4.387 ms** | 5.141 ms |
+| Ladezeit | 75 s | 13 s | 5 s |
+
+**Quantisierung macht es hier langsamer, nicht schneller** — durchgehend etwa 18 %. Das
+widerlegt die frühere Annahme („Faktor 2–4, ohne AVX2 eher 1,5–2,5") und ist auf dieser
+CPU plausibel: INT8-Gewinne stammen aus VNNI-Befehlen, die es erst ab Cascade Lake gibt.
+Ohne sie bleibt vom INT8-Pfad nur der Aufwand fürs Quantisieren und Dequantisieren.
+**Auf Hardware ohne VNNI also fp32 über ONNX, nicht uint8.**
+
+Der Sprung von 1.243 auf 173 ms ist Faktor 7,2 — aber er mischt zwei Ursachen: die
+Runtime *und* das kleinere Modell. Trennen lässt sich das hier nicht, weil `urchade`
+keine ONNX-Exporte mitbringt. Für die Deployment-Entscheidung ist es gleich, für die
+Begründung nicht.
+
+**Die Exporte liefern unterschiedliche Ergebnisse** — 89 Spans (`model.onnx`) gegen 113
+(`model_quint8.onnx`) bei 4.000 Zeichen. Die geladene Datei entscheidet also über die
+Erkennung und ist damit identitätsrelevant (§5.4). Ob die 113 mehr Funde oder mehr
+Fehlalarme sind, sagt keine Latenzmessung, sondern `eval_ner.py`.
+
+#### Was daran noch zu drehen wäre
 2. **Feste Thread-Zahl > 1.** Die Determinismus-Zusage verlangt eine *fixierte und
    deklarierte* Thread-Zahl, nicht zwingend die 1 (§5.4). Ein fest auf z. B. 4 gepinntes
    `OMP_NUM_THREADS` wäre ebenso reproduzierbar — **sofern** verifiziert. Das brächte auf
