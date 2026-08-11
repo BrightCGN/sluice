@@ -1,10 +1,10 @@
 # NER-Dienst & `pii_ner` — Betrieb, Messung, Evaluation
 
-> **Stand:** 2026-08-07 · Spec-Revision 12 (§5.3, §5.4, §7.5)
-> **Status der Deployment-Entscheidung (2026-08-10): CPU auf der Sluice-VM trägt nicht.**
-> Proxy-Messung in [§3.1](#31-die-zwei-werte--stand-wert-2-gemessen-proxy-wert-1-offen):
-> ~1,2 s bei 200 Zeichen, ~9,4 s bei 4.000 Zeichen — pro Request, im synchronen Egress-Pfad.
-> Offen bleiben die Bestätigung auf der VM selbst und der ONNX/INT8-Pfad.
+> **Stand:** 2026-08-11 · Spec-Revision 12 (§5.3, §5.4, §7.5)
+> **Status der Deployment-Entscheidung: CPU auf der Sluice-VM trägt nicht — auf der VM
+> selbst bestätigt** (2026-08-11, zwei unabhängige Läufe): **1,24 s** bei 200 Zeichen,
+> **8,6 s** bei 4.000 — pro Request, im *synchronen* Egress-Pfad, vor dem Provider-Aufruf.
+> Offen bleibt allein der ONNX/INT8-Pfad.
 
 ---
 
@@ -118,9 +118,35 @@ wo auch der Vorrang der Regex-Stufe entschieden wird.
 | # | Frage | Stand |
 |---|---|---|
 | 1 | Enthält PyTorch Pascal-Kernel (`sm_61`)? | **offen** — nur auf dem GPU-Host beantwortbar |
-| 2 | Reicht CPU-Inferenz? | **gemessen, Antwort: nein** (siehe unten) |
+| 2 | Reicht CPU-Inferenz? | **auf der VM gemessen, Antwort: nein** (siehe unten) |
 
-#### Messung vom 2026-08-10 (Proxy)
+#### Messung auf der Ziel-VM, 2026-08-11 — maßgeblich
+
+Zwei unabhängige Läufe auf `sluicegw` selbst, dazwischen eine Tuning-Runde am
+Proxmox-Host. Modell `urchade/gliner_multi_pii-v1` (mDeBERTa-v3-base, ~278M),
+PyTorch 2.13.0+cpu, fp32, ein Thread, Median aus 5 Läufen nach 2 Warmläufen:
+
+| Eingabelänge | 1. Lauf | 2. Lauf (nach Host-Tuning) | Spans |
+|---|---|---|---|
+| 200 Zeichen | 1.243,9 ms | **1.242,8 ms** | 3 |
+| 1.000 Zeichen | 3.853,8 ms | **3.835,6 ms** | 14 |
+| 4.000 Zeichen | 8.651,3 ms | **8.597,5 ms** | 32 |
+
+Ladezeit 75–77 s (passt in `TimeoutStartSec=300`). Streuung innerhalb eines Laufs
+< 1 % — das Ergebnis ist stabil, nicht zufällig.
+
+**Das Host-Tuning hat nichts bewegt** (< 1 % Unterschied, also Rauschen), und das ist
+kein Versäumnis am Hypervisor: die Erkennung läuft auf **einem** festgenagelten Thread
+(§5.4), der Engpass ist die Rechenleistung *eines* Kerns auf einer Ivy-Bridge-CPU ohne
+AVX2. vCPU-Zahl, Ballooning, NUMA und Scheduler verteilen Arbeit, sie beschleunigen sie
+nicht. Messbar würde nur, was Befehlssatz oder Takt bewegt — beides liegt hier fest.
+
+**Die Proxy-Hochrechnung war gut.** Sie sagte ~1.150 ms / ~9.400 ms voraus; gemessen
+wurden 1.243 ms / 8.598 ms. Die Methode taugt also für künftige Abschätzungen — die
+Entscheidung stützt sich trotzdem auf die Messung auf der Zielmaschine.
+
+<details>
+<summary>Frühere Proxy-Messung vom 2026-08-10 (überholt, zur Nachvollziehbarkeit)</summary>
 
 Gemessen **nicht** auf der Ziel-VM, sondern auf einer architektonisch nahen CPU. Das ist
 zulässig, weil beide auf derselben Vektor-ISA-Stufe liegen — und weil das Design die
@@ -145,6 +171,8 @@ Modell `urchade/gliner_multi_pii-v1` (mDeBERTa-v3-base, ~278M), PyTorch 2.13.0+c
 
 Hochrechnungsfaktor 1,5 = Taktverhältnis 3,5/2,3 plus ~5 % IPC-Gewinn Ivy über Sandy
 Bridge, konservativ abgerundet für KVM-Overhead.
+
+</details>
 
 #### Bewertung: **CPU auf der VM trägt nicht**
 
@@ -174,9 +202,8 @@ eigene Request, sondern alle parallelen.
 4. **`pii_regex` statt `pii_ner`, wo es reicht.** Die Regex-Stufe kostet Mikrosekunden und
    braucht keinen Dienst. Die Zweistufigkeit ist pro Profil wählbar — genau dafür.
 
-> **Der definitive Wert kommt weiterhin von der VM selbst.** `scripts/probe_ner_hardware.py`
-> läuft dort jetzt ohne Klimmzüge (der `sys.path`-Bootstrap ist drin). Die Proxy-Zahlen
-> ersetzen die Messung nicht, sie machen ihren Ausgang nur sehr wahrscheinlich.
+> **Erledigt:** Die Messung auf der VM liegt vor (oben) und bestätigt die Hochrechnung.
+> Damit ist Wert 2 abschließend beantwortet; offen ist nur noch der ONNX/INT8-Pfad.
 
 ### 3.2 Messung durchführen
 
@@ -444,6 +471,25 @@ sudo -u sluice-ner HF_HOME=/opt/sluice/models HF_HUB_DISABLE_XET=1 \
   /opt/sluice/.venv/bin/python -c \
   "from huggingface_hub import snapshot_download; print(snapshot_download('<repo>'))"
 ```
+
+**Das Modell-Repo allein genügt nicht.** GLiNER lädt den Tokenizer aus dem
+**Basis-Encoder-Repo** nach — bei `urchade/gliner_multi_pii-v1` ist das
+`microsoft/mdeberta-v3-base`. Wer nur das Modell vorlädt, bekommt beim ersten Start
+trotzdem einen Netzzugriff und ohne Netz einen `LocalEntryNotFoundError` mitten im
+`TimeoutStartSec`-Fenster. Beide Repos gehören also in den Cache:
+
+```bash
+sudo -u sluice-ner HF_HOME=/opt/sluice/models HF_HUB_DISABLE_XET=1 \
+  /opt/sluice/.venv/bin/python -c "
+from huggingface_hub import snapshot_download
+for r in ('<modell-repo>', 'microsoft/mdeberta-v3-base'):
+    print(r, '->', snapshot_download(r))"
+```
+
+Prüfen lässt sich die Vollständigkeit mit `HF_HUB_OFFLINE=1`: läuft der Dienst damit
+hoch, ist der Cache vollständig und die Firewall darf ausgehend wieder zu (§6). Welches
+Basis-Repo ein anderes Modell braucht, verrät der erste Ladeversuch — der Repo-Name steht
+in der Fehlermeldung bzw. in der Tokenizer-Warnung von `transformers`.
 
 `HF_HUB_DISABLE_XET=1` ist hier kein Detail: HuggingFace lädt große Dateien über eine
 eigene Chunk-Infrastruktur (`hf_xet`) mit anderen Endpunkten als der normale
