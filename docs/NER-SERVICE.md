@@ -279,6 +279,46 @@ deutsche Sprachabdeckung ist zwingend.
 `GLiNER.from_pretrained(<repo>)` laufen lassen. Parametergröße und Entitätstypen aus der
 Modellkarte sagen nichts darüber, ob der Checkpoint zum installierten Paket passt.
 
+### 4.1 Pflichtprüfung vor jedem Modellwechsel: stimmen die Offsets?
+
+Sluice redigiert über **Zeichen-Offsets**, die das Modell liefert (§5.3). Stimmen die
+nicht, ist der Schaden subtil und groß zugleich: die Erkennung *funktioniert*, sie meldet
+die richtigen Namen — nur die Koordinaten sind verschoben. Herauskommt ein Text, in dem
+der Platzhalter neben dem Namen steht und der Name selbst stehen bleibt. Der Verifier
+fängt davon nur, was er als Muster kennt; freie Namen fielen durch.
+
+Typische Ursache wäre ein Modell, das Byte- statt Zeichen-Offsets liefert. Auffallen würde
+das erst ab dem ersten Mehrbyte-Zeichen — im deutschen Text also spätestens beim ersten
+Umlaut. Deshalb gehören Umlaute, `ß` **und** ein Zeichen außerhalb der BMP in den Testtext:
+
+```bash
+sudo -u sluice-ner HF_HOME=/opt/sluice/models HF_HUB_OFFLINE=1 \
+  /opt/sluice/.venv/bin/python - <<'PY'
+from gliner import GLiNER
+TEXT = ("Am Montag traf Anna Schmidt die Firma Acme GmbH in Köln. "
+        "Ihre Kollegin Bärbel Müßiggang wohnt in der Grüne Straße 7. "
+        "🏠 Danach fuhr Bernd Mueller nach Düsseldorf.")
+modell = GLiNER.from_pretrained("<repo>")
+schlecht = 0
+for e in modell.predict_entities(TEXT, ["person","organization","address","location"], threshold=0.3):
+    ok = TEXT[e["start"]:e["end"]] == e["text"]
+    schlecht += not ok
+    print(f'{e["label"]:13} {e["text"]!r:22} {"OK" if ok else "ABWEICHUNG"}')
+print("belastbar" if not schlecht else "OFFSETS KAPUTT")
+PY
+```
+
+**Ergebnis 2026-08-11:** `urchade/gliner_multi_pii-v1` 7 Spans / 0 Abweichungen,
+`knowledgator/gliner-pii-base-v1.0` 8 Spans / 0 Abweichungen. Beide liefern korrekte
+Zeichen-Offsets. Die Warnung, die `transformers` beim Laden von `microsoft/mdeberta-v3-base`
+ausgibt („incorrect tokenization"), betrifft die Tokenisierung *innerhalb* des Modells und
+ist für die zurückgegebenen Koordinaten folgenlos — geprüft, nicht angenommen.
+
+Nebenbefund zur Modellwahl: `knowledgator` hat das Emoji als `location` klassifiziert.
+Ein Fehlalarm, passend zu den 113 statt 89 Spans aus §3.1 — das Modell ist großzügiger.
+Für einen recall-orientierten Riegel (§5.4) ist Übermaskierung die billigere Fehlerart,
+aber es ist ein Hinweis auf geringere Precision. Ein Datenpunkt, keine Bewertung.
+
 GLiNER nimmt die Entitätstypen **zur Laufzeit** als Label-Liste entgegen. Deshalb steht die
 Liste in der Sluice-Konfiguration (`[profile.X.ner] labels`) und ist Teil der versionierten
 Anonymisierungs-Identität — nicht im Dienst verdrahtet. Ein Modelltausch braucht damit
@@ -554,9 +594,9 @@ Egress-Pfad blockieren. `TimeoutStartSec=300`, weil das Laden dauert.
 
 | Punkt | Was fehlt | Stand |
 |---|---|---|
-| **Offsets bei mDeBERTa** | `transformers` warnt beim Laden von `microsoft/mdeberta-v3-base` vor „incorrect tokenization". Sluice redigiert über Zeichen-Offsets aus dieser Tokenisierung — stimmen sie nicht, wird die falsche Stelle geschwärzt. Gegenprobe: gemeldete Offsets aus dem Originaltext ausschneiden und mit `entity["text"]` vergleichen. | **offen, vorrangig** |
 | **Schwellwert-Kalibrierung** | Deutschsprachiger Dev/Test-Split aus dem realen Anwendungsfeld; danach `scripts/eval_ner.py` und Ergebnis nach §5. Der ausgelieferte Wert ist ein recall-orientierter Startwert. | offen |
-| **Modellauswahl** | Latenz ist gemessen (§3.1), Recall nicht. `knowledgator` ist schneller, ob es auf deutschem Text besser findet als `urchade`, sagt nur die Evaluation. | offen — Latenz entschieden, Qualität nicht |
+| **Modellauswahl** | Latenz ist gemessen (§3.1), Recall nicht. `knowledgator` ist schneller, ob es auf deutschem Text besser findet als `urchade`, sagt nur die Evaluation. Erster Hinweis auf geringere Precision: Fehlalarm auf einem Emoji (§4.1). | offen — Latenz entschieden, Qualität nicht |
+| **Offsets bei mDeBERTa** | Beide Kandidaten liefern korrekte Zeichen-Offsets, auch bei Umlauten, `ß` und außerhalb der BMP (§4.1). Die `transformers`-Warnung ist für die zurückgegebenen Koordinaten folgenlos. Die Prüfung ist **vor jedem Modellwechsel zu wiederholen**. | erledigt 2026-08-11 |
 | **`model_revision`** | In `ner.env` und im Profil eintragen. Für `knowledgator/gliner-pii-base-v1.0` ist der Hash bekannt: `61726e0ad791dcab3e29339bbec3ad42ded65641`. | offen |
 | **Deployment-Entscheidung CPU/GPU** | Auf der VM gemessen (§3.1): torch-CPU trägt nicht, ONNX fp32 schon für kurze Texte. GPU bleibt die Option für lange Dokumente. | **beantwortet für CPU**, GPU offen |
 | **INT8/Quantisierung** | Gemessen und **verworfen**: ohne VNNI ~18 % langsamer als fp32 (§3.1). Erst wieder relevant auf Hardware ab Cascade Lake. | erledigt |
