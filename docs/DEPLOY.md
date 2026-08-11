@@ -472,14 +472,21 @@ dann beim ersten Kontakt mit dem Dienst, beide fail-closed (§5.4):
   die verankerte Schwelle wirkungslos — Sluice blockiert, statt eine Recall-Zusage ohne
   Deckung zu tragen.
 
-> **Vor dem produktiven Einsatz sind zwei Dinge zu klären**, beide in `docs/NER-SERVICE.md`
-> beschrieben und beide **noch offen**:
-> 1. **CPU oder GPU?** `python3 scripts/probe_ner_hardware.py --model <repo>` auf *dieser*
->    Maschine. Reicht CPU, ist CPU vorzuziehen — ein Chokepoint ohne GPU-Abhängigkeit ist
->    betrieblich robuster. Achtung: der FX-6300 hat **kein AVX2**, die CPU-Kernel fallen
->    also auf langsamere Pfade zurück — messen statt vermuten.
-> 2. **Schwellwert kalibrieren.** `scripts/eval_ner.py` mit einem deutschsprachigen Dev-Split.
->    Der ausgelieferte Wert ist ein recall-orientierter Startwert, **keine Kalibrierung**.
+> **Messstand vom 2026-08-11** (Details und Zahlen: `docs/NER-SERVICE.md` §3.1):
+> - **PyTorch auf der VM-CPU trägt nicht** — 1,24 s bei 200 Zeichen, 8,6 s bei 4.000, pro
+>   Request im synchronen Egress-Pfad. Zweimal bestätigt; Host-Tuning ändert nichts, weil
+>   die Erkennung auf einem festgenagelten Thread läuft.
+> - **ONNX Runtime schon** — 173 ms bei 200 Zeichen. Damit ist `pii_ner` für kurze Texte
+>   vertretbar, für lange Dokumente nicht. Die Wahl trifft man **pro Profil**.
+> - **Quantisierung (uint8) ist hier der falsche Weg** — rund 18 % *langsamer* als fp32,
+>   weil die INT8-Gewinne VNNI-Befehle brauchen (erst ab Cascade Lake). Also
+>   `onnx/model.onnx`, nicht `onnx/model_quint8.onnx`.
+>
+> **Zwei Dinge bleiben offen**, beide in `docs/NER-SERVICE.md` §9:
+> 1. **Modellwahl.** Die Latenz ist gemessen, der *Recall* nicht. Welches Modell auf
+>    deutschem Text besser findet, sagt `scripts/eval_ner.py` auf einem Dev-Split.
+> 2. **Schwellwert kalibrieren.** Der ausgelieferte Wert ist ein recall-orientierter
+>    Startwert, **keine Kalibrierung** — ohne Dev-Split ist die Recall-Zusage unbelegt.
 
 **Betriebsverhalten, das man kennen muss:** Fällt der NER-Dienst aus oder reißt das
 Timeout-Budget, wird **jeder Request eines `pii_ner`-Profils blockiert** — HTTP 503,
@@ -715,6 +722,8 @@ neuen Provider: Gateway-Instanz aktivieren + URL in `sluice.env`, §5.1),
 | `203/EXEC … Permission denied` auf `.venv/bin/uvicorn` | Der Service-User darf die Datei nicht ausführen — meist, weil ein `pip`-Lauf als root sie mit enger `umask` neu geschrieben hat (Konsolen-Skripte werden bei jeder (Neu-)Installation erzeugt) | **Zuerst `head -1 /opt/sluice/.venv/bin/uvicorn`** — zeigt der Shebang irgendwo anders hin als `/opt/sluice/.venv/bin/python`, ist das venv von einer anderen Maschine (siehe die Zeile darunter). Sonst: `sudo -u sluice /opt/sluice/.venv/bin/uvicorn --version` als echter `exec`-Versuch, nicht `test -x` — das prüft nur die Bits des Skripts und meldet „ok", während `execve` am Interpreter oder an einem `noexec`-Mount scheitert. Ergänzend `findmnt -no OPTIONS -T /opt/sluice` und `namei -l` auf den Shebang-Pfad. Reparatur: `sudo chown -R sluice:sluice /opt/sluice && sudo chmod -R a+rX /opt/sluice` — mit NER-Dienst danach `sudo chown -R sluice-ner:sluice-ner /opt/sluice/models && sudo chmod -R go-rwx /opt/sluice/models`. `bootstrap.sh` zieht das seit dem Fix nach jedem `pip`-Lauf selbst gerade |
 | 503 `sluice_mode_unavailable` | NER-Dienst down, Timeout gerissen, oder `SLUICE_NER_URL`/`[profile.…ner] url` fehlt (§5.2) | `systemctl status sluice-ner`, Kern-Log `guard.mode_unavailable`. **Kein Sluice-Fehler im engeren Sinn — so ist es gedacht:** kein stiller Rückfall auf `pii_regex` |
 | 503, obwohl `sluice-ner` läuft | Modellidentität weicht ab (`NerIdentityError`) oder `SLUICE_NER_SCORE_FLOOR` > Profil-`threshold` | Reason lesen — sie nennt Feld, verankerten und gemeldeten Wert. `curl 127.0.0.1:17900/v1/info` gegen den `[profile.….ner]`-Block halten |
+| 503 mit `ner_text_truncated` bzw. Hinweis auf das Kontextfenster | `max_chars_per_chunk` passt nicht in das Token-Fenster des Modells — das Modell würde still kürzen und der hintere Teil bliebe ungeprüft | `max_chars_per_chunk` im Profil senken (Default 700 passt in 384 Token). **Nicht** durch Anheben des Fensters „lösen": die Blockade ist die Zusage, nicht der Fehler |
+| `sluice-ner` startet nicht, Meldung „Präzision widersprüchlich" | `SLUICE_NER_PRECISION` passt nicht zu `SLUICE_NER_ONNX_FILE` | Beide angleichen: `onnx/model.onnx` ⇒ `fp32`, `onnx/model_quint8.onnx` ⇒ `uint8`. Die Präzision geht in die Anonymisierungs-Identität ein und muss der geladenen Datei entsprechen |
 | `sluice-ner` startet nicht | `SLUICE_NER_MODEL` leer, Modell-Download fehlgeschlagen, `gliner` fehlt | `journalctl -u sluice-ner -n 50`. Der Dienst lädt das Modell **beim Start** (fail-closed) — er kommt bewusst gar nicht erst hoch, statt später im Egress-Pfad zu scheitern |
 | `sluice-ner` bricht mit `TimeoutStartSec` ab | Erststart lädt die Gewichte aus dem Netz | Einmalig 443 für den NER-Host öffnen (§6), Dienst starten, danach wieder schließen — der Cache unter `/opt/sluice/models` bleibt |
 | `pii_ner` blockt viel mehr als erwartet | `threshold` ist ein recall-orientierter Startwert, **keine Kalibrierung** | `scripts/eval_ner.py` mit deutschsprachigem Dev-Split fahren, dann den Profil-`threshold` setzen (`docs/NER-SERVICE.md`) |

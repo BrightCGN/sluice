@@ -193,6 +193,17 @@ tests/                   # kein Netz; httpx.MockTransport wo HTTP nötig
   graceful degradation, kein Überspringen bei fehlender URL. Ein Chokepoint, der bei Ausfall
   durchlässiger wird, ist kein Chokepoint. Ebenso: **kein dynamisches Batching** (Determinismus,
   §5.4) und **kein generatives LLM** für die Erkennung.
+- **Keine stille Kürzung.** Das Modell hat ein festes Token-Fenster und kürzt längere Eingaben
+  *ohne Fehler* — es sieht den hinteren Teil nie. Das ist gefährlicher als ein Ausfall: ein
+  Ausfall blockiert, eine Kürzung lässt durch, und das Audit meldet `released=true` für einen
+  halb geprüften Text. Deshalb blockiert der Dienst bei tatsächlicher Kürzung, und der Kern
+  zerlegt lange Texte vorher in **überlappende** Stücke (§5.3). Die Überlappung ist nicht
+  optional — ohne sie wird jede Entität an einer Schnittstelle in beiden Stücken verfehlt.
+- **Die Identität darf nichts behaupten, was nicht geprüft ist.** Alles, was das Ergebnis
+  verändert, gehört hinein *und* wird gegen die Wirklichkeit geprüft: Modellidentität und
+  `score_floor` gegen `/v1/info`, die Stückgröße gegen das gemeldete Kontextfenster, die
+  deklarierte ONNX-Präzision gegen den geladenen Export (Name **und** Graph-Inhalt). Ein
+  Wert, den niemand prüft, ist im Audit keine Zusage, sondern eine Vermutung.
 - **Innerhalb eines Modus, der den Verifier komponiert (`strict`/`pii_regex`/`pii_ner`/
   `generalizing`/`pseudonymizing`), nie lockern** — auch nicht „weil reversibel". Ob ein Modus ihn überhaupt komponiert, ist Modus-
   Entscheidung (`passthrough` tut es nicht); der *Auslieferungs-Default bleibt `strict`* mit

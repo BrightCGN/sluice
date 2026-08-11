@@ -561,7 +561,13 @@ identische Spans liefern. Getragen von vier Maßnahmen:
   Batchgrößen ab (400) — die Ablehnung *ist* die Durchsetzung.
 - **Ein Intra-Op-Thread.** Gleicher Grund: die Thread-Anzahl ändert die Reduktionsreihenfolge.
 - **Numerische Präzision fixiert und ausgewiesen** (`/v1/info` → Identität). Ein Wechsel
-  fp32→fp16 verschiebt Scores und damit Grenzfälle; er darf nicht unbemerkt passieren.
+  fp32→fp16 verschiebt Scores und damit Grenzfälle; er darf nicht unbemerkt passieren. Im
+  ONNX-Betrieb wird die *deklarierte* Präzision gegen die *geladene* Datei geprüft — über
+  den Exportnamen und zusätzlich über die Quantisierungs-Operatoren im Graph, weil der
+  Name eine Behauptung ist und der Graph nicht. Widerspruch ⇒ der Dienst startet nicht.
+- **Zerlegung fixiert und ausgewiesen** (`max_chars_per_chunk`, `chunk_overlap_chars`).
+  Andere Schnitte bedeuten anderen Kontext je Stück und damit andere Spans; ohne sie in
+  der Identität wäre „gleicher Digest ⇒ gleiche Spans" für lange Texte unwahr (§5.3).
 - **Totale Sortierordnung** der Spans — zwei gleich lange Spans an derselben Stelle wären
   sonst nur zufällig geordnet.
 

@@ -423,7 +423,9 @@ curl 'http://127.0.0.1:17800/v1/anonymization-identity?profile=prismclaw-ner'
     "threshold": 0.30,
     "labels": ["person", "organization", "address", "location"],
     "batch_size": 1,
-    "threshold_calibrated": false
+    "threshold_calibrated": false,
+    "max_chars_per_chunk": 700,
+    "chunk_overlap_chars": 200
   }
 }
 ```
@@ -433,8 +435,24 @@ Modellversion und Schwellwert sind daraus direkt ableitbar. Ändert sich eines v
 Wörterbuch-Terme gehen nur als **Digest** ein: sie sind personenbezogen (Rev. 10) und
 dürfen nie ins Audit, ihre Änderung muss aber sichtbar sein.
 
-Meldet der Dienst über `/v1/info` eine **andere** Identität als das Profil verankert,
-blockiert Sluice fail-closed. Sonst wäre der protokollierte Wert eine Lüge.
+Die **Zerlegungsparameter** stehen mit drin, weil sie das Ergebnis verändern: andere
+Schnitte heißen anderer Kontext je Stück und damit andere Spans (§2a). Ohne sie wäre
+„gleicher Digest ⇒ gleiche Spans" für lange Texte schlicht unwahr.
+
+Drei Schranken halten die Identität ehrlich, alle fail-closed:
+
+| Prüfung | Wogegen | Wann |
+|---|---|---|
+| Modellidentität | Profil verankert `model_repo`/`model_revision`/`model_precision` ≠ `/v1/info` | erster Kontakt |
+| `score_floor` | Dienst filtert schärfer vor als der Profil-Schwellwert ⇒ Schwelle wirkungslos | erster Kontakt |
+| Stückgröße vs. `max_tokens` | konfigurierte Stücke passen nicht ins Kontextfenster ⇒ stille Kürzung | erster Kontakt |
+| ONNX-Präzision | `SLUICE_NER_PRECISION` ≠ geladener Export (Name **und** Graph-Inhalt) | Dienststart |
+
+Die letzte kam am 2026-08-11 dazu. Anlass: `SLUICE_NER_PRECISION` wurde frei deklariert,
+während `SLUICE_NER_ONNX_FILE` bestimmte, was wirklich lief — und die Exporte liefern
+unterschiedliche Ergebnisse (89 vs. 113 Spans bei 4.000 Zeichen). Der Dienst leitet die
+Präzision jetzt aus dem Exportnamen ab, sieht zusätzlich im Graph nach
+Quantisierungs-Operatoren und **startet bei Widerspruch nicht**.
 
 > `model_revision` leer zu lassen macht die Identität wertlos: das Repo könnte sich unter
 > derselben Kennung ändern. Commit-Hash eintragen.
@@ -534,12 +552,15 @@ Egress-Pfad blockieren. `TimeoutStartSec=300`, weil das Laden dauert.
 
 ## 9. Offene Punkte
 
-| Punkt | Was fehlt |
-|---|---|
-| **Deployment-Entscheidung CPU/GPU** | Messung auf `192.168.101.166` (§3.2), Zahlen nach §3.1 eintragen. |
-| **Qwen3 → GLiNER** | Der `llama-server` auf dem Zielhost wird durch den NER-Dienst ersetzt. Vorher prüfen, ob Qwen3 dort noch andere Konsumenten hat. |
-| **Schwellwert-Kalibrierung** | Deutschsprachiger Dev/Test-Split aus dem realen Anwendungsfeld; danach `scripts/eval_ner.py` und Ergebnis nach §5. |
-| **Modellauswahl** | Mindestens zwei Kandidaten gegeneinander (§4). Bis dahin ist der Startpunkt eine Empfehlung, keine Wahl. |
-| **`model_revision`** | In `ner.env` und im Profil eintragen — solange leer, ist die Identität nicht festgenagelt. |
-| **Transport bei entferntem Betrieb** | Tunnel oder TLS wählen (§5a), `SLUICE_NER_TOKEN` setzen, Port 17900 auf die Kern-IP beschränken. |
-| **Feinschliff `pii_de`** | KFZ- und Telefonmuster sind recall-orientiert weit gefasst; die False-Positive-Rate auf echten Texten ist noch nicht vermessen. |
+| Punkt | Was fehlt | Stand |
+|---|---|---|
+| **Offsets bei mDeBERTa** | `transformers` warnt beim Laden von `microsoft/mdeberta-v3-base` vor „incorrect tokenization". Sluice redigiert über Zeichen-Offsets aus dieser Tokenisierung — stimmen sie nicht, wird die falsche Stelle geschwärzt. Gegenprobe: gemeldete Offsets aus dem Originaltext ausschneiden und mit `entity["text"]` vergleichen. | **offen, vorrangig** |
+| **Schwellwert-Kalibrierung** | Deutschsprachiger Dev/Test-Split aus dem realen Anwendungsfeld; danach `scripts/eval_ner.py` und Ergebnis nach §5. Der ausgelieferte Wert ist ein recall-orientierter Startwert. | offen |
+| **Modellauswahl** | Latenz ist gemessen (§3.1), Recall nicht. `knowledgator` ist schneller, ob es auf deutschem Text besser findet als `urchade`, sagt nur die Evaluation. | offen — Latenz entschieden, Qualität nicht |
+| **`model_revision`** | In `ner.env` und im Profil eintragen. Für `knowledgator/gliner-pii-base-v1.0` ist der Hash bekannt: `61726e0ad791dcab3e29339bbec3ad42ded65641`. | offen |
+| **Deployment-Entscheidung CPU/GPU** | Auf der VM gemessen (§3.1): torch-CPU trägt nicht, ONNX fp32 schon für kurze Texte. GPU bleibt die Option für lange Dokumente. | **beantwortet für CPU**, GPU offen |
+| **INT8/Quantisierung** | Gemessen und **verworfen**: ohne VNNI ~18 % langsamer als fp32 (§3.1). Erst wieder relevant auf Hardware ab Cascade Lake. | erledigt |
+| **Qwen3 → GLiNER** | Der `llama-server` auf dem Zielhost wird durch den NER-Dienst ersetzt. Vorher prüfen, ob Qwen3 dort noch andere Konsumenten hat. | offen, nur bei GPU-Variante |
+| **Transport bei entferntem Betrieb** | Tunnel oder TLS wählen (§5a), `SLUICE_NER_TOKEN` setzen, Port 17900 auf die Kern-IP beschränken. | offen, nur bei GPU-Variante |
+| **Feinschliff `pii_de`** | KFZ- und Telefonmuster sind recall-orientiert weit gefasst; die False-Positive-Rate auf echten Texten ist noch nicht vermessen. | offen |
+| **Blockierender `detect()`** | Der Dienst führt die Erkennung synchron im async-Handler aus (`service.py`), der Event-Loop ist währenddessen belegt — auch `/v1/health` antwortet nicht. Parallele Anfragen serialisieren. Ein Threadpool wäre der Fix, wirft aber die Frage der Thread-Sicherheit des Modells auf. | offen, bewusst |
