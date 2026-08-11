@@ -29,6 +29,7 @@ Start (systemd `deploy/sluice-ner.service`, Port 17900):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from collections.abc import Callable
@@ -36,6 +37,7 @@ from typing import Any
 
 import structlog
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -74,6 +76,21 @@ def create_ner_app(
         score_floor=info.score_floor,
         token_required=expected_token is not None,
     )
+
+    # Die Erkennung ist CPU-gebunden und dauert auf CPU Sekunden (NER-SERVICE.md §3.1).
+    # Zwei Dinge müssen dabei zugleich gelten, und sie ziehen in verschiedene Richtungen:
+    #
+    #   - Der Event-Loop darf nicht blockieren. Sonst antwortet während einer Erkennung
+    #     auch `/v1/health` nicht — ein Health-Check würde ausgerechnet unter Last
+    #     fehlschlagen und den Dienst für tot erklären, während er arbeitet.
+    #   - Es darf immer nur EINE Erkennung laufen. Nebenläufige Aufrufe auf demselben
+    #     Modell wären weder für die Thread-Sicherheit von GLiNER belegt noch mit der
+    #     Determinismus-Zusage (§5.4) vereinbar.
+    #
+    # Beides zusammen: die Erkennung in den Threadpool (Loop bleibt frei), aber durch ein
+    # Lock serialisiert (immer nur eine). Wartende Anfragen halten damit eine Coroutine
+    # statt den Loop — sie stehen an, blockieren aber niemanden sonst.
+    detect_lock = asyncio.Lock()
 
     def _error(status: int, error_type: str, reason: str) -> JSONResponse:
         return JSONResponse({"error": {"type": error_type, "reason": reason}}, status_code=status)
@@ -138,7 +155,8 @@ def create_ner_app(
             )
 
         try:
-            spans = resolved_engine.detect(text, labels)
+            async with detect_lock:
+                spans = await run_in_threadpool(resolved_engine.detect, text, labels)
         except NerTruncationError as exc:
             # Eigener Status und eigener Typ, nicht der 500er-Sammeltopf: das ist kein
             # Defekt des Dienstes, sondern eine zu lange Eingabe — und der Aufrufer kann
