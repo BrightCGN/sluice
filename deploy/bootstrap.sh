@@ -170,9 +170,28 @@ normalize_app_perms() {
 # Zustand hinterlassen, in dem der Kern nicht mehr startet.
 trap normalize_app_perms EXIT
 
-log "Installiere Sluice …"
+# EDITIERBAR (-e), damit es genau EINE Codequelle gibt. Eine normale Installation legt
+# eine zweite Kopie unter site-packages/sluice/ an, und welche der beiden gilt, hängt dann
+# am Arbeitsverzeichnis: uvicorn stellt mit --app-dir (Default "") das cwd an den Anfang
+# von sys.path, und alle drei Units setzen WorkingDirectory=/opt/sluice. Die Dienste laufen
+# damit aus dem Quellbaum, jedes Skript mit anderem cwd aber aus der Kopie — die nach einem
+# reinen Datei-Deploy (rsync/tar ohne pip) veraltet ist, ohne dass irgendetwas fehlschlägt.
+# Ein Chokepoint, dessen Version vom Arbeitsverzeichnis abhängt, ist keiner.
+log "Installiere Sluice (editierbar) …"
 "${APP_DIR}/.venv/bin/pip" install --quiet --upgrade pip
-"${APP_DIR}/.venv/bin/pip" install --quiet "${APP_DIR}"
+"${APP_DIR}/.venv/bin/pip" install --quiet -e "${APP_DIR}"
+
+# Reste einer früheren, nicht-editierbaren Installation müssen weg. pip räumt sie beim
+# Umstieg normalerweise selbst ab — aber nur, solange seine RECORD-Datei intakt ist. Bleibt
+# das Verzeichnis liegen, verdeckt es den Quellbaum weiterhin: der Pfad aus dem .pth-File
+# wird NACH site-packages in sys.path eingehängt, die Kopie gewinnt also. Genau die
+# Zweideutigkeit, die dieser Schritt beseitigen soll — deshalb hier hart nachsehen.
+SITE_PKGS="$("${APP_DIR}/.venv/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+if [[ -d "${SITE_PKGS}/sluice" ]]; then
+    warn "Entferne Kopie einer früheren (nicht-editierbaren) Installation:"
+    warn "  ${SITE_PKGS}/sluice — sie würde ${APP_DIR}/sluice verdecken."
+    rm -rf "${SITE_PKGS}/sluice"
+fi
 
 # Sofort normalisieren, nicht erst am Ende von Abschnitt 4: ab hier ist der Kern
 # startfähig, und alles Folgende — insbesondere der große, fehleranfällige
@@ -213,8 +232,10 @@ if [[ "${WITH_NER}" == "1" ]]; then
         "${APP_DIR}/.venv/bin/pip" install --quiet --index-url "${TORCH_CPU_INDEX}" torch
     fi
 
+    # Ebenfalls -e: ohne das würde pip hier eine nicht-editierbare Kopie über die
+    # editierbare Installation legen und die Zweideutigkeit von oben wieder einführen.
     log "Installiere NER-Extra '[${NER_EXTRA}]' — das dauert …"
-    "${APP_DIR}/.venv/bin/pip" install --quiet "${APP_DIR}[${NER_EXTRA}]"
+    "${APP_DIR}/.venv/bin/pip" install --quiet -e "${APP_DIR}[${NER_EXTRA}]"
     normalize_app_perms
 fi
 
@@ -327,8 +348,24 @@ if ! ip -o addr show 2>/dev/null | grep -qw "${BIND_HOST}"; then
 fi
 
 # Importtest als Service-User: findet kaputte venvs/Rechte vor dem ersten Start.
+#
+# Bewusst aus '/' heraus (`cd /` im Subshell) und mit Prüfung des AUFGELÖSTEN Pfades.
+# Aus ${APP_DIR} heraus wäre der Test wertlos: dann läge der Quellbaum ohnehin vorn in
+# sys.path, und selbst eine kaputte Installation sähe grün aus. Ein Import, der nur
+# gelingt, weil man im richtigen Verzeichnis stand, sagt nichts über den Dienst.
 log "Kurztest (Import als Service-User) …"
-sudo -u "${SERVICE_USER}" "${APP_DIR}/.venv/bin/python" -c "import sluice.server; print('ok')"
+( cd / && sudo -u "${SERVICE_USER}" "${APP_DIR}/.venv/bin/python" -c "
+import sys, sluice.server
+resolved = sluice.server.__file__
+expected = '${APP_DIR}/sluice/'
+if not resolved.startswith(expected):
+    sys.exit(
+        'Sluice wird nicht aus ${APP_DIR} geladen, sondern aus:\n'
+        '  ' + resolved + '\n'
+        'Damit gilt im Dienst anderer Code als der hier ausgelieferte. Übrig gebliebene\n'
+        'Installation entfernen und dieses Skript erneut laufen lassen.'
+    )
+print('ok —', resolved)" )
 
 # Und jetzt das, was systemd wirklich tut: das Konsolen-Skript AUSFÜHREN. Der Importtest
 # oben läuft über den Interpreter und übergeht damit die Shebang-Zeile — genau die Stelle,

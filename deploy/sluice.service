@@ -2,7 +2,10 @@
 #
 # Installation:
 #   1. Repo nach /opt/sluice, venv anlegen:  python3.11 -m venv /opt/sluice/.venv
-#      && /opt/sluice/.venv/bin/pip install /opt/sluice
+#      && /opt/sluice/.venv/bin/pip install -e /opt/sluice
+#      (editierbar: eine Codequelle. Diese Unit setzt WorkingDirectory=/opt/sluice, und
+#       uvicorn stellt das cwd an den Anfang von sys.path — ohne -e entscheidet also das
+#       Arbeitsverzeichnis, ob Quellbaum oder site-packages-Kopie gilt. DEPLOY.md §3.)
 #   2. Service-User:      useradd --system --home /opt/sluice --shell /usr/sbin/nologin sluice
 #   3. Konfiguration:     /etc/sluice/profiles.toml   (Profil-Schema, Spec §4)
 #                         /etc/sluice/sluice.env      (Gateway-URLs; chmod 600, Eigentümer root)

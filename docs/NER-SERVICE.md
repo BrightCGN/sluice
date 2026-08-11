@@ -533,7 +533,8 @@ install -d -o sluice-ner -g sluice-ner -m 700 /opt/sluice/models
 # CUDA-Variante samt kompletter nvidia-Laufzeit nach — mehrere GB auf einer Maschine
 # ohne GPU. Ist torch danach erfüllt, lässt gliner die nvidia-Pakete weg.
 /opt/sluice/.venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu torch
-/opt/sluice/.venv/bin/pip install '/opt/sluice[ner]'   # bzw. [ner-onnx] / [ner-onnx-gpu]
+# -e wie beim Kern-Install: eine Codequelle, siehe DEPLOY.md Schritt 3.
+/opt/sluice/.venv/bin/pip install -e '/opt/sluice[ner]'   # bzw. [ner-onnx] / [ner-onnx-gpu]
 /opt/sluice/.venv/bin/pip list | grep -i -E 'nvidia|cuda' || echo "keine CUDA-Pakete"
 
 # pip lief als root und hat Dateien neu geschrieben — Rechte danach geradeziehen,

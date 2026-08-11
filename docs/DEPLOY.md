@@ -147,17 +147,34 @@ Dann venv anlegen und installieren:
 
 ```bash
 sudo python3 -m venv /opt/sluice/.venv
-sudo /opt/sluice/.venv/bin/pip install /opt/sluice
+sudo /opt/sluice/.venv/bin/pip install -e /opt/sluice
 sudo chown -R sluice:sluice /opt/sluice
 ```
+
+> **Warum `-e` (editierbar)?** Damit es genau **eine** Codequelle gibt. Ohne `-e` liegt
+> eine zweite Kopie unter `.venv/lib/python3.*/site-packages/sluice/`, und welche der
+> beiden gilt, hängt am Arbeitsverzeichnis: uvicorn stellt mit `--app-dir` (Default `""`)
+> das cwd an den Anfang von `sys.path`, und alle drei Units setzen
+> `WorkingDirectory=/opt/sluice`. Die Dienste laufen dann aus dem Quellbaum, ein Skript
+> mit anderem cwd aber aus der Kopie — die nach einem reinen Datei-Deploy (rsync/tar ohne
+> `pip`) veraltet ist, **ohne dass irgendetwas fehlschlägt**. Ein Chokepoint, dessen
+> Version vom Arbeitsverzeichnis abhängt, ist keiner. Steigst du auf einer bestehenden
+> VM um, muss eine übrig gebliebene `site-packages/sluice/` weg — der Pfad aus dem
+> `.pth`-File wird *nach* `site-packages` in `sys.path` eingehängt, die Kopie gewinnt
+> also weiterhin. `bootstrap.sh` räumt sie selbst ab und prüft das Ergebnis.
 
 `/opt/sluice` muss für „other" lesbar bleiben (Standard-Umask, o+rX) — die Gateways
 laufen unter eigenen Usern (Rev. 8, Schritt 2) und teilen sich nur den Code, sonst nichts.
 
-Kurztest (noch ohne Profile — erwartet ist Default-Deny, kein Fehler):
+Kurztest (noch ohne Profile — erwartet ist Default-Deny, kein Fehler). **Nicht aus
+`/opt/sluice` heraus ausführen:** dort liegt der Quellbaum ohnehin vorn in `sys.path`, der
+Test wird grün und sagt nichts über die Installation. Deshalb `cd /` und den aufgelösten
+Pfad mit ausgeben lassen:
 
 ```bash
-sudo -u sluice /opt/sluice/.venv/bin/python -c "import sluice.server; print('ok')"
+cd / && sudo -u sluice /opt/sluice/.venv/bin/python \
+    -c "import sluice.server as m; print('ok —', m.__file__)"
+# erwartet: ok — /opt/sluice/sluice/server.py
 ```
 
 ---
@@ -437,7 +454,9 @@ sudo install -d -o sluice-ner -g sluice-ner -m 700 /opt/sluice/models
 # Modell-Abhängigkeiten. Sie landen zwangsläufig im selben venv (ein Interpreter für alle
 # Units) — der Kern *importiert* sie trotzdem nicht: gliner/torch werden erst in
 # sluice.ner.engine lazy geladen, und die läuft nur im NER-Prozess.
-sudo /opt/sluice/.venv/bin/pip install '/opt/sluice[ner]'   # bzw. [ner-onnx], [ner-onnx-gpu]
+# Auch hier -e: ohne das legt pip eine nicht-editierbare Kopie über die editierbare
+# Installation und führt die Zweideutigkeit aus Schritt 3 wieder ein.
+sudo /opt/sluice/.venv/bin/pip install -e '/opt/sluice[ner]'   # bzw. [ner-onnx], [ner-onnx-gpu]
 sudo chown -R sluice:sluice /opt/sluice/.venv && sudo chmod -R a+rX /opt/sluice/.venv
 
 sudo install -m600 -o root -g root /opt/sluice/deploy/ner.env.example /etc/sluice/ner.env
@@ -668,10 +687,14 @@ fällt er aber nicht auf, weil der Konsument nur ein 503 sieht.
 ```bash
 cd /opt/sluice
 sudo -u sluice git pull                       # bzw. rsync wie in Schritt 3B
-sudo /opt/sluice/.venv/bin/pip install /opt/sluice
 sudo systemctl restart sluice
 curl -s http://192.168.87.40:8000/v1/health   # Abnahme 7.1 wiederholen
 ```
+
+Durch die editierbare Installation (Schritt 3) ist der neue Code mit dem Kopieren bereits
+da — ein `pip`-Lauf ist für reine Code-Änderungen **nicht** nötig, der Restart genügt.
+Nötig bleibt er, wenn sich `pyproject.toml` ändert: neue Abhängigkeiten, neue Extras, neue
+Konsolen-Skripte. Im Zweifel `sudo bash deploy/bootstrap.sh` — der Lauf ist idempotent.
 
 Alternativ und äquivalent: `sudo bash deploy/bootstrap.sh` aus dem aktualisierten
 Checkout (idempotent, fasst `/etc/sluice` nicht an — §0.1). Läuft der NER-Dienst mit,
@@ -679,7 +702,7 @@ dann `SLUICE_WITH_NER=1` mitgeben, damit auch dessen Extra nachgezogen wird, und
 mitneustarten:
 
 ```bash
-sudo /opt/sluice/.venv/bin/pip install '/opt/sluice[ner]'
+sudo /opt/sluice/.venv/bin/pip install -e '/opt/sluice[ner]'
 # Einzeln und in dieser Reihenfolge: bei `restart a b` garantiert systemd keine
 # Reihenfolge, und der Kern blockiert jedes pii_ner-Profil, solange der Dienst weg ist.
 sudo systemctl restart sluice-ner
@@ -715,7 +738,8 @@ neuen Provider: Gateway-Instanz aktivieren + URL in `sluice.env`, §5.1),
 | 502 mit `gateway …` in der reason | Gateway-Service down / URL falsch / Token-Mismatch | `systemctl status sluice-gateway@<p>`; `SLUICE_GATEWAY_<P>_URL` und `SLUICE_GATEWAY_TOKEN` auf beiden Seiten prüfen |
 | `start-limit-hit`, „Start request repeated too quickly" | **Folge, nicht Ursache** — systemd hat nach wiederholtem Absturz aufgegeben und startet den Dienst nicht mehr, auch nach behobener Ursache nicht | Erst die echte Fehlermeldung suchen: `journalctl -u <unit> --since -1h \| grep -v '^░░'` — sie steht *vor* dem ersten `start-limit-hit`. Nach dem Fix `sudo systemctl reset-failed <unit>`, sonst bleibt jeder `restart` wirkungslos |
 | Gateways scheitern, Kern läuft (oder umgekehrt) | Die Gateway-User sind weder Eigentümer noch Gruppe von `/opt/sluice` — sie kommen nur über `o+rX` an venv und Code. Ein zu enges `chmod` trifft sie zuerst | `sudo -u sluice-gw-anthropic /opt/sluice/.venv/bin/uvicorn --version`. Reparatur wie in der `203/EXEC`-Zeile unten |
-| `203/EXEC`, aber `ls -l` am Skript ist einwandfrei und `/opt` hat kein `noexec` | **Das venv stammt von einer anderen Maschine.** Ein venv ist nicht verschiebbar: die Skripte in `bin/` tragen den absoluten Interpreterpfad im Shebang. Zeigt der ins Home des Entwicklers (`0700`), wird aus dem fälligen `ENOENT` ein `EACCES` — die Meldung nennt das Skript, gemeint ist der Interpreter | `head -1 /opt/sluice/.venv/bin/uvicorn` muss `#!/opt/sluice/.venv/bin/python` sein. Sonst neu bauen: `rm -rf /opt/sluice/.venv`, dann `bootstrap.sh` (erkennt das seit dem Fix selbst und baut neu) oder `python3 -m venv` + `pip install /opt/sluice` von Hand. **Nie ein venv rsyncen** — nur den Code, das venv gehört auf die Zielmaschine |
+| `203/EXEC`, aber `ls -l` am Skript ist einwandfrei und `/opt` hat kein `noexec` | **Das venv stammt von einer anderen Maschine.** Ein venv ist nicht verschiebbar: die Skripte in `bin/` tragen den absoluten Interpreterpfad im Shebang. Zeigt der ins Home des Entwicklers (`0700`), wird aus dem fälligen `ENOENT` ein `EACCES` — die Meldung nennt das Skript, gemeint ist der Interpreter | `head -1 /opt/sluice/.venv/bin/uvicorn` muss `#!/opt/sluice/.venv/bin/python` sein. Sonst neu bauen: `rm -rf /opt/sluice/.venv`, dann `bootstrap.sh` (erkennt das seit dem Fix selbst und baut neu) oder `python3 -m venv` + `pip install -e /opt/sluice` von Hand. **Nie ein venv rsyncen** — nur den Code, das venv gehört auf die Zielmaschine |
+| Neuer Code ist kopiert, der Dienst verhält sich aber wie vorher — oder umgekehrt: ein Skript sieht alten Code, während der Dienst neuen fährt | **Zwei Kopien im Spiel.** Eine nicht-editierbare Installation liegt zusätzlich unter `.venv/lib/python3.*/site-packages/sluice/`; welche gilt, hängt am Arbeitsverzeichnis (uvicorn stellt das cwd an den Anfang von `sys.path`, die Units setzen `WorkingDirectory=/opt/sluice`). Nichts schlägt fehl, es gilt nur je nach Aufruf anderer Code | Aufgelösten Pfad **aus `/` heraus** prüfen, nie aus `/opt/sluice` — dort verdeckt der Quellbaum jeden Befund: `cd / && sudo -u sluice /opt/sluice/.venv/bin/python -c "import sluice.policy as m; print(m.__file__)"`. Erwartet ist `/opt/sluice/sluice/policy.py`. Zeigt er nach `site-packages`, ist eine Alt-Installation übrig: `sudo bash deploy/bootstrap.sh` räumt sie ab und prüft nach |
 | Dienste laufen, sterben aber **nach dem nächsten Reboot** | Ein kaputtes `/opt/sluice` fällt im Betrieb nicht auf — die laufenden Prozesse halten ihre Dateien offen. Erst der Neustart deckt es auf, dann aber bei allen Units gleichzeitig | Nach jedem Eingriff an `/opt/sluice` (bootstrap, `pip`, `chmod`) einmal `sudo systemctl restart sluice 'sluice-gateway@*'` statt bis zum nächsten Reboot zu warten |
 | 401 `gateway_unauthorized` bzw. 401 vom NER-Dienst | Token nur auf **einer** Seite gesetzt, Wert abweichend, oder doppelt zugewiesen | Beide Dateien vergleichen (§4.3); `grep -c '^SLUICE_…_TOKEN=' <datei>` muss je `1` ergeben. Nach jeder Änderung **beide** Seiten neu starten — der Wert wird beim Start gelesen |
 | Service startet nicht | Python < 3.11, venv kaputt, Port belegt | `journalctl -u sluice -n 50`; `ss -tlnp \| grep 8000` |
