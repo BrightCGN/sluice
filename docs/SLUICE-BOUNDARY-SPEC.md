@@ -1,6 +1,20 @@
 # Sluice — Boundary- & Contract-Spec (v1)
 
-> **Stand:** 2026-08-07. **Revision 12:** **zweistufige PII-Erkennung** — die Modi
+> **Stand:** 2026-08-11. **Revision 13:** `detector_profile` nimmt **einen Namen oder eine
+> Liste** (§5.1). Grund: ein Profil braucht regelmäßig *beides* — die Muster seiner Domäne
+> und die deutschen PII-Muster. `media` allein kennt keine IBAN, `pii_de` allein keine
+> NAS-Pfade; wer sich entscheiden muss, tauscht Schutz in der eigenen Domäne gegen Schutz
+> in einer fremden. Mehrere Namen werden zur **Vereinigungsmenge** zusammengelegt und unter
+> einem kanonischen Namen (`media+pii_de`) geführt — nach außen bleibt es *ein* Name, damit
+> Verifier, Span-Erkennung und Anonymisierungs-Identität (§5.4) unverändert weiterarbeiten.
+> Der Name ist **sortiert**, damit eine Umordnung im Profil den Digest nicht bewegt.
+> **Rückwärtskompatibel:** ein einzelner String verhält sich wie bisher, inklusive Digest.
+> **Eine Verschärfung:** ein **unbekannter** Profilname ist ab Rev. 13 ein *Ladefehler*.
+> Bis Rev. 12 lud ein Tippfehler klaglos und der Verifier blockte erst zur Laufzeit —
+> fail-closed zwar, aber als Fehlerbild irreführend: man sucht dann einen Defekt statt
+> eines Zeichendrehers.
+>
+> **Revision 12:** **zweistufige PII-Erkennung** — die Modi
 > `pii_regex` und `pii_regex`+NER `pii_ner` (§3, §5.3), der eigenständige **NER-Dienst**
 > (§7.5) und die **Anonymisierungs-Identität** (§5.4). `pii_ner` ist **additiv, nicht
 > alternativ**: beide Stufen laufen, das Ergebnis ist die **Vereinigungsmenge** der Spans;
@@ -368,7 +382,7 @@ mode                = "strict"                # auto-redigiert das rohe Operator
 egress_enabled      = true
 allowed_purposes    = ["playlist_curation"]
 provider_allowlist  = ["claude", "gemini", "openai"]
-detector_profile    = "media"
+detector_profile    = ["media", "pii_de"]     # Vereinigungsmenge: NAS-Pfade UND deutsche PII (§5.1, Rev. 13)
 dictionary_terms    = ["Richard", "Musterstraße 12"]  # Namen/Adressen, die Regex nicht fängt (§5.1, Rev. 10)
 
 [profile."bank-tool"]                         # strengstes Profil (§4.4)
@@ -457,6 +471,38 @@ Die *Engine* (Regex/NER-Runner) ist geteilt; die *Muster* kommen aus dem `detect
 \* Beim Bank-Tool widersprechen sich Sanitisierung und Lösbarkeit maximal (Beträge *sind* der
 Nutzen). Auflösung: Rechnen bleibt **lokal**; nur die abstrahierte Strategiefrage (Kategorien/
 Spannen statt Salden) geht raus. Das ist Profil-Arbeit, kein Sluice-Mechanismus. *(Details post-v1)*
+
+#### 5.1.0 Mehrere Profile zusammenlegen (Rev. 13)
+
+Die Sets oben sind nach **Domänen** geschnitten, reale Texte sind es nicht. Eine
+Playlist-Anfrage enthält NAS-Pfade *und* womöglich eine Abrechnung; ein Ticket enthält
+Kundendaten *und* interne Systemverweise. Bis Rev. 12 zwang `detector_profile` zu einer
+Wahl, die man nicht gewinnen kann:
+
+| `media` allein | `pii_de` allein |
+|---|---|
+| kennt NAS-Pfade, interne Hostnamen, `/home/<user>` | kennt IBAN (Mod-97), Steuer-ID, SVNR, KVNR, Kreditkarte (Luhn), Telefon, KFZ |
+| kennt **keine** IBAN | kennt **keinen** NAS-Pfad |
+
+Deshalb nimmt `detector_profile` ab Rev. 13 auch eine **Liste**:
+
+```toml
+detector_profile = ["media", "pii_de"]        # Vereinigungsmenge beider Muster-Sets
+detector_profile = "infra"                    # weiterhin gültig, unverändertes Verhalten
+```
+
+Eigenschaften, die dabei zählen:
+
+- **Vereinigungsmenge, keine Reihenfolge-Semantik.** Es gibt keinen Vorrang zwischen den
+  Sets; alle Muster laufen. Dubletten (E-Mail und IP stehen in mehreren Sets) werden
+  entfernt — sie wären harmlos, blähten aber die Befundliste im Audit auf.
+- **Kanonischer, sortierter Name** (`media+pii_de`). Sortiert, weil die Vereinigung
+  ordnungsunabhängig ist: eine bloße Umordnung im Profil darf den Identitäts-Digest nicht
+  bewegen — dieselbe Überlegung wie bei den Wörterbuch-Termen (§5.4).
+- **Nach außen ein Name.** Das zusammengelegte Set wird unter seinem kanonischen Namen in
+  der Registry geführt. Verifier, Span-Erkennung, Modi und Identität arbeiten unverändert
+  mit *einem* Namen weiter, und im Audit steht die Zusammensetzung ablesbar da.
+- **Unbekannter Name ⇒ Ladefehler**, nicht erst ein Laufzeit-Block (siehe Kopf, Rev. 13).
 
 #### 5.1.1 Profil-**Wörterbuch** `dictionary_terms` (Rev. 10)
 

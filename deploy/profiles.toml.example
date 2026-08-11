@@ -45,7 +45,7 @@ mode                = "strict"
 egress_enabled      = true
 allowed_purposes    = ["playlist_curation"]
 provider_allowlist  = ["anthropic", "gemini"]
-detector_profile    = "media"
+detector_profile    = ["media", "pii_de"]   # Vereinigungsmenge (Rev. 13, §5.1)
 dictionary_terms    = ["<haushaltsname>", "<strasse hausnr>"]  # echte Namens-/Adressliste auf der VM
 
 

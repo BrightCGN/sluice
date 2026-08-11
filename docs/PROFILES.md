@@ -38,7 +38,7 @@ Maßgeblich ist `sluice/policy.py` (`Profile`, `parse_profiles`).
 | `allowed_purposes` | Liste | `[]` | Erlaubte Verwendungszwecke. **Leer = alles blockiert** (siehe Fallstrick 3). |
 | `provider_allowlist` | Liste | `[]` | Erlaubte Provider (§4.1). Leer = kein Provider erlaubt. |
 | `allowed_modes` | Liste | `[]` | Begrenzt die wählbaren Modi. Leer hat **zwei** Bedeutungen — siehe §4. |
-| `detector_profile` | String | `"infra"` | Muster-Set des Verifiers (§5). Bei `passthrough` wirkungslos. |
+| `detector_profile` | String **oder Liste** | `"infra"` | Muster-Set(s) des Verifiers (§5). Mehrere Namen werden zur Vereinigungsmenge zusammengelegt (Rev. 13). Bei `passthrough` wirkungslos. |
 | `dictionary_terms` | Liste | `[]` | Konsument-deklarierte Literale, die Regex nicht fängt (§5.1, Rev. 10). |
 | `[…​.reversible]` | Tabelle | — | Mapping-Lebenszyklus; **nur bei `mode = "pseudonymizing"` geparst** (Fallstrick 4). |
 | `[…​.ner]` | Tabelle | — | NER-Stufe + Anonymisierungs-Identität (Rev. 12). Wird **immer** geparst, wenn der Block existiert — nicht nur bei `mode = "pii_ner"`, weil ein Request den Modus wechseln darf. Siehe §6a. |
@@ -109,6 +109,24 @@ Muster-Sets aus `sluice/detectors/`:
 | `financial` | IBAN, BIC, Kontonummern |
 | `pii_de` | *(Rev. 12)* Deutsche PII **mit Prüfziffernverfahren**: IBAN (Mod-97), Steuer-ID, Sozialversicherungs-, Krankenversichertennummer, Kreditkarte (Luhn) · E-Mail, IPv4/IPv6, MAC, KFZ-Kennzeichen, Telefon · Secrets. Die Regex-Stufe für `pii_regex`/`pii_ner`. |
 
+### Mehrere Sets kombinieren (Rev. 13)
+
+Die Sets sind nach Domänen geschnitten, reale Texte sind es nicht: eine Playlist-Anfrage
+enthält NAS-Pfade *und* womöglich eine Abrechnung. `media` allein kennt keine IBAN,
+`pii_de` allein keinen NAS-Pfad — wer sich entscheiden muss, tauscht Schutz in der eigenen
+Domäne gegen Schutz in einer fremden. Deshalb nimmt das Feld auch eine Liste:
+
+```toml
+detector_profile = ["media", "pii_de"]   # Vereinigungsmenge beider Sets
+detector_profile = "infra"               # weiterhin gültig, unverändertes Verhalten
+```
+
+Es gibt **keinen Vorrang** zwischen den Sets, alle Muster laufen. Dubletten (E-Mail und IP
+stehen in mehreren Sets) werden entfernt. Intern entsteht ein Set mit kanonischem,
+**sortiertem** Namen — `media+pii_de` —, und genau der steht in der
+Anonymisierungs-Identität: die Zusammensetzung ist im Audit ablesbar, und eine bloße
+Umordnung im Profil bewegt den Digest nicht.
+
 `dictionary_terms` ergänzt das um **literale** Begriffe, die keine Regex erkennt — freie
 Personennamen, Straßen, Hausnamen. Die Terme werden regex-escaped und wortgrenzen-gebunden
 ersetzt (Platzhalter `[NAME]`).
@@ -116,12 +134,12 @@ ersetzt (Platzhalter `[NAME]`).
 > **Fallstrick 2:** `dictionary_terms` steht im Klartext in der Profildatei. Das ist der Grund
 > für `640 root:sluice` — die Liste ist selbst personenbezogen. Nicht in Git einchecken.
 
-> **Fallstrick 3 — nicht beim Laden geprüft:** Ein **Tippfehler im `detector_profile`-Namen**
-> bricht den Start *nicht* ab. `parse_profiles` validiert nur `mode` und `allowed_modes` gegen
-> die Registry; ein unbekanntes Detektor-Profil fällt erst zur Laufzeit auf — der Verifier
-> findet kein Muster-Set und **blockt fail-closed** (`verifier.py:52`). Symptom: Profil lädt
-> sauber, aber *jeder* Request wird blockiert; im Audit steht dann wörtlich
-> `unbekanntes Detektor-Profil '<name>' (fail-closed)`. Namen genau prüfen.
+> **Fallstrick 3 — behoben in Rev. 13:** Ein **Tippfehler im `detector_profile`-Namen** brach
+> den Start früher *nicht* ab; das Profil lud sauber, und erst der Verifier blockte zur
+> Laufzeit jeden Request. Fail-closed war das, aber als Fehlerbild irreführend — man sucht
+> dann einen Defekt statt eines Zeichendrehers. Seit Rev. 13 ist ein unbekannter Name ein
+> **Ladefehler**: der Dienst startet nicht, und die Meldung nennt den falschen Namen sowie
+> die verfügbaren. Das gilt für den String wie für jeden Eintrag einer Liste.
 
 ---
 

@@ -56,7 +56,9 @@ Sluice undicht oder nicht wiederverwendbar. **Nicht selbst raten — gegen die S
   die Modus-Registry und das Ausführen des gewählten Modus.
 - **Beim Konsumenten (Domäne/Policy):** die **semantische Generalisierung** (aus einem
   validierten Fix die übertragbare Lektion machen — das ist Temper-Businesslogik, nicht Sluice),
-  die konkreten Detektor-**Muster** (als Profil deklariert), die Provider-Allowlist.
+  die konkreten Detektor-**Muster** (als Profil deklariert, seit Rev. 13 auch als
+  **Liste** — `detector_profile = ["media", "pii_de"]` legt die Sets zur
+  Vereinigungsmenge zusammen), die Provider-Allowlist.
 - **Seit Revision 2 in Sluice:** Provider-Adapter (anthropic/openai/gemini/mistral, §7.3)
   inkl. API-Keys per Env — Adapter werden **nur nach `released=true`** aufgerufen, nie davor.
   **Seit Revision 7 verbindlich:** der Kern ruft Provider **nie direkt** — nur über die

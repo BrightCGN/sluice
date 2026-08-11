@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from sluice.detectors import UnknownDetectorProfile, merge_detector_profiles
 from sluice.ner import (
     DEFAULT_CHUNK_OVERLAP_CHARS,
     DEFAULT_LABELS,
@@ -196,12 +197,51 @@ def parse_profiles(toml_text: str) -> dict[str, Profile]:
             allowed_purposes=tuple(raw.get("allowed_purposes", ())),
             provider_allowlist=tuple(raw.get("provider_allowlist", ())),
             allowed_modes=allowed_modes,
-            detector_profile=raw.get("detector_profile", "infra"),
+            detector_profile=_parse_detector_profile(name, raw),
             dictionary_terms=tuple(str(t) for t in raw.get("dictionary_terms", ())),
             reversible=reversible,
             ner=_parse_ner(name, raw),
         )
     return profiles
+
+
+def _parse_detector_profile(profile_name: str, raw: dict) -> str:
+    """Parst `detector_profile` — ein Name **oder** eine Liste (§5.1, Rev. 13).
+
+    Ein Profil braucht regelmäßig beides: die Muster seiner Domäne *und* die deutschen
+    PII-Muster. `media` allein kennt keine IBAN, `pii_de` allein keine NAS-Pfade — wer
+    sich entscheiden muss, tauscht Schutz in der eigenen Domäne gegen Schutz in einer
+    fremden. Mehrere Namen werden deshalb zur **Vereinigungsmenge** zusammengelegt und
+    unter einem kanonischen Namen (`media+pii_de`) geführt.
+
+    Nach außen bleibt es *ein* Name: Verifier, Span-Erkennung und die
+    Anonymisierungs-Identität arbeiten unverändert weiter, und im Audit steht die
+    Zusammensetzung ablesbar statt als Liste.
+
+    **Unbekannte Namen sind ab Rev. 13 ein Ladefehler.** Bis dahin lud ein Tippfehler
+    klaglos durch und der Verifier blockte erst später mit „unbekanntes Detektor-Profil":
+    fail-closed zwar, aber als Fehlerbild irreführend — im Betrieb sucht man dann einen
+    Defekt statt eines Zeichendrehers. Der Dienst startet jetzt gar nicht erst.
+    """
+    declared = raw.get("detector_profile", "infra")
+    if isinstance(declared, str):
+        names: list[str] = [declared]
+    elif isinstance(declared, (list, tuple)):
+        if not all(isinstance(x, str) for x in declared):
+            raise ValueError(
+                f"Profil '{profile_name}': detector_profile-Liste darf nur Strings enthalten."
+            )
+        names = list(declared)
+    else:
+        raise ValueError(
+            f"Profil '{profile_name}': detector_profile muss ein Name oder eine Liste von "
+            f"Namen sein, ist {type(declared).__name__}."
+        )
+
+    try:
+        return merge_detector_profiles(names)
+    except UnknownDetectorProfile as exc:
+        raise ValueError(f"Profil '{profile_name}': {exc}") from exc
 
 
 def _parse_ner(profile_name: str, raw: dict) -> NerConfig | None:
