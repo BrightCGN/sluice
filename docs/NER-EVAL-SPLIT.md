@@ -144,6 +144,29 @@ Deshalb: Regeln **vor** der ersten Zeile festlegen und aufschreiben. Vorschlag:
 Diese Tabelle ist ein Vorschlag, keine Wahrheit. Entscheidend ist nicht *welche* Regel,
 sondern dass sie **eine** ist und schriftlich vorliegt.
 
+#### Festgelegt für dieses Projekt (2026-08-11)
+
+Verbindlich für jeden Split, der ab hier annotiert wird. Wer eine Regel ändert, ändert die
+Messgrundlage — dann ist der alte Split nicht mehr mit dem neuen vergleichbar, und beide
+gehören neu ausgewertet. Die Vorschlagstabelle oben gilt unverändert weiter; hier stehen
+nur die Fälle, die sie offenlässt.
+
+| Fall | Regel | Warum |
+|---|---|---|
+| **Interne System-, Projekt- und Hostnamen** (Projektnamen, NAS-Freigaben, Servernamen) | **nicht** annotieren | Zuständigkeit der Regex-/Wörterbuch-Stufe (`infra`-Detektor, `dictionary_terms`), nicht der NER-Stufe (§3.1). Wer sie ins Gold nimmt, misst die falsche Stufe: fehlende Treffer werden dem Modell angelastet, obwohl sie deterministisch besser lösbar sind. |
+| **Personen des öffentlichen Lebens** (Künstler, Autoren, Politiker) | annotieren wie jede Person | Eine Regel statt einer Ermessensfrage. „Ist diese Person prominent genug?" ist beim Annotieren nicht reproduzierbar zu beantworten und wäre damit die größte Quelle uneinheitlicher Grenzen. Der Preis ist Übermaskierung in Medientexten — die billigere Fehlerart (§5.4). |
+| **Mehrzeilige Postanschrift** | Straße + Hausnummer als `address`, `PLZ Ort` als eigener `location`-Span | Folgt der Vorschlagstabelle. Getrennte Typen erlauben getrennte Diagnose: `eval_ner.py` zielt auf den **schlechtesten** Entitätstyp, und ein schwacher `location`-Recall bliebe in einem Sammel-`address` unsichtbar. |
+| **Namen innerhalb von E-Mail-Adressen, Benutzernamen, Dateipfaden** | **nicht** annotieren | Dieselbe Begründung wie bei den Systemnamen: E-Mail, Pfad und Konto haben feste Form und gehören der Regex-Stufe. Der Name *im* Bezeichner wird nicht doppelt gezählt. |
+| **Rollen- und Funktionsbezeichnungen** („der Geschäftsführer", „die Kollegin") | **nicht** annotieren | Bezeichnet keine identifizierbare Person. Sonst wandert die Grenze zwischen Annotatoren. |
+| **Ortsangabe im Organisationsnamen** („Acme GmbH, Köln") | `‹Acme GmbH›`, `‹Köln›` — zwei Spans | Keine Verschachtelung (Vorschlagstabelle); das Komma trennt zwei eigenständige Angaben. |
+| **Bindestrich-Doppelnamen** („Anna Schmidt-Müller") | ein `person`-Span über den ganzen Namen | Der Bindestrich ist Namensbestandteil, keine Grenze. |
+| **Hausnummer mit Zusatz** („Grüne Straße 7a", „7–9") | mit annotieren | Gehört zur Anschrift; ein abgeschnittener Zusatz wäre ein Teiltreffer und zählte exakt gewertet doppelt negativ. |
+
+**Zur Textauswahl bei einem neuen Profil:** §2.1 verlangt Texte aus dem *echten* Egress.
+Ein frisch angelegtes Profil hat naturgemäß keinen. Nimm deshalb den Verkehr, den es
+**übernehmen** wird — die Anfragen der Konsumenten, die künftig darauf zeigen — und nicht
+erfundene Sätze. Sonst kalibrierst du auf einer Textsorte, die so nie ankommt.
+
 ### 3.3 Format
 
 Eine Zeile je Dokument, UTF-8, JSONL:
@@ -241,7 +264,9 @@ Die Ergebnistabelle je Modell und Entitätstyp gehört nach `NER-SERVICE.md` §5
 
 ## 6. Reihenfolge
 
-1. Ablage anlegen (§0), Profil auswählen (§2.2), Regeln festlegen (§3.2).
+1. Ablage anlegen (§0), Profil auswählen (§2.2). Regeln stehen fest (§3.2, „Festgelegt für
+   dieses Projekt") — Schritt 2 kann sie nachschärfen, aber nur schriftlich und für alle
+   Splits gemeinsam.
 2. 20 Dokumente annotieren, Gegenprobe (§3.4), Regeln nachschärfen. **Erst dann weiter.**
 3. Rest annotieren, nach Dokumenten in dev/test teilen.
 4. Konsistenz prüfen (§4).
