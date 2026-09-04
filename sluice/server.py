@@ -47,6 +47,15 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from sluice.audit import AuditLog
+from sluice.content import messages_surfaces
+from sluice.dialect import (
+    DialectError,
+    check_tool_choice,
+    detect_tool_dialect,
+    normalize_messages,
+    normalize_tools,
+    render_tool_calls,
+)
 from sluice.dispatch import guarded_completion, guarded_stream
 from sluice.guard import guarded_egress
 from sluice.policy import Profile, load_profiles
@@ -106,10 +115,13 @@ def _effective_profile(profile: Profile, mode: str | None) -> Profile | JSONResp
 
 
 def _raw_text(messages: list[dict[str, Any]]) -> str:
-    """Alle Textinhalte — das reviewbare „Vorher" fürs Audit (§6)."""
-    return "\n".join(
-        m["content"] for m in messages if isinstance(m.get("content"), str)
-    )
+    """Alle Textinhalte — das reviewbare „Vorher" fürs Audit (§6).
+
+    Über dieselbe Flächen-Aufzählung wie Modus und Verifier (§5.5): sonst zeigte das
+    Audit ein „Vorher", das schmaler ist als das, was tatsächlich geprüft und gesendet
+    wurde — ein Review über einen Ausschnitt ist kein Review.
+    """
+    return "\n".join(messages_surfaces(messages).texts)
 
 
 def create_app(
@@ -253,7 +265,23 @@ def create_app(
 
         scope_key = request.headers.get("X-Sluice-Scope")
         scope = Scope(key=scope_key) if scope_key else None
-        payload = EgressPayload(raw_text=_raw_text(messages), messages=messages)
+
+        # Dialekt-Grenze (Rev. 15, §7.2): hier — und nur hier — wird die Konsumenten-Form
+        # in die neutrale übersetzt. Alles dahinter kennt nur noch die neutrale. Die
+        # Übersetzung läuft VOR dem Guard, damit dieser Tool-Argumente als aufgelöste
+        # Werte prüft und redigiert statt als undurchsichtigen JSON-String (§5.5).
+        raw_tools = body.get("tools") or None
+        try:
+            dialect = detect_tool_dialect(raw_tools, messages)
+            check_tool_choice(body.get("tool_choice"))
+            tools = normalize_tools(raw_tools)
+            messages = normalize_messages(messages)
+        except DialectError as exc:
+            return _bad_request(str(exc))
+
+        # Tools stehen IM Payload, nicht daneben: es gibt keinen Weg, sie zu senden, ohne
+        # dass der Guard sie sieht (§1). Er verifiziert sie als readonly-Fläche (§7.2).
+        payload = EgressPayload(raw_text=_raw_text(messages), messages=messages, tools=tools)
         common: dict[str, Any] = {
             "profile": effective,
             "purpose": purpose,
@@ -274,6 +302,9 @@ def create_app(
 
         try:
             if body.get("stream"):
+                # Streaming von Tool-Calls ist nicht dabei — der Tool-Loop läuft ohnehin
+                # nicht-streamend (§6.5). Die Abweisung sitzt im Dispatch (eine Stelle für
+                # beide Aufrufwege), nicht hier; `payload.tools` trägt sie dorthin.
                 stream_outcome = await guarded_stream(adapter=adapter, **common)
                 if not stream_outcome.released or stream_outcome.chunks is None:
                     return _blocked(stream_outcome.reason, stream_outcome.error_type)
@@ -293,6 +324,13 @@ def create_app(
             outcome = await guarded_completion(adapter=adapter, **common)
             if not outcome.released:
                 return _blocked(outcome.reason, outcome.error_type)
+            # Fordert das Modell Tool-Calls an, trägt die Message sie — in **dem Dialekt,
+            # in dem die Anfrage kam** (Rev. 15, §7.2). Ohne Tools ist die Antwort
+            # byte-gleich zu Rev. 13.
+            message: dict[str, Any] = {"role": "assistant", "content": outcome.response_text}
+            rendered = render_tool_calls(outcome.tool_calls, dialect)
+            if rendered:
+                message["tool_calls"] = rendered
             return JSONResponse(
                 {
                     "object": "chat.completion",
@@ -301,8 +339,8 @@ def create_app(
                     "choices": [
                         {
                             "index": 0,
-                            "message": {"role": "assistant", "content": outcome.response_text},
-                            "finish_reason": "stop",
+                            "message": message,
+                            "finish_reason": outcome.finish_reason or "stop",
                         }
                     ],
                 }

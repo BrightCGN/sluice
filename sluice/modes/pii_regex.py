@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from sluice.content import message_surfaces, rebuild_message
 from sluice.identity import AnonymizationIdentity, build_identity
 from sluice.modes import EgressPayload, Sanitized, Scope, StreamReverserProtocol
 from sluice.spans import Span, apply_spans, detect_regex_spans, merge_spans
@@ -72,10 +73,17 @@ class PiiRegexMode:
         return apply_spans(text, await self.spans_for(text))
 
     async def _redact_message(self, message: dict[str, Any]) -> dict[str, Any]:
-        content = message.get("content")
-        if not isinstance(content, str):
+        """Redigiert **jede** Textfläche der Message, nicht nur `content:str` (§5.5).
+
+        Jede Fläche wird einzeln erkannt und redigiert — Spans sind Offsets *in ihrem
+        Text*, eine Fläche darf also nie mit einer anderen zusammengeklebt werden.
+        Was sich nicht aufzählen lässt, blockiert im Guard fail-closed.
+        """
+        surfaces = message_surfaces(message)
+        if not surfaces.texts:
             return message
-        return {**message, "content": await self._redact(content)}
+        redacted = [await self._redact(t) for t in surfaces.texts]
+        return rebuild_message(message, redacted)
 
     async def reverse_text(self, text: str, scope: Scope) -> str:
         raise NotImplementedError("PiiRegexMode ist irreversibel (§3).")

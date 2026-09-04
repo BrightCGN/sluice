@@ -17,6 +17,7 @@ from sluice.providers import (
     PROVIDER_TIMEOUT,
     ProviderError,
     ProviderResponse,
+    ToolCall,
     require_api_key,
 )
 
@@ -44,26 +45,95 @@ class AnthropicAdapter:
         return {"x-api-key": key, "anthropic-version": _API_VERSION}
 
     def _body(
-        self, messages: list[dict[str, Any]], *, model: str, max_tokens: int
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+        max_tokens: int,
+        tools: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         system_parts = [
             m["content"] for m in messages if m.get("role") == "system" and m.get("content")
         ]
-        chat = [m for m in messages if m.get("role") != "system"]
+        chat = self._to_native_messages(messages)
         body: dict[str, Any] = {"model": model, "max_tokens": max_tokens, "messages": chat}
         if system_parts:
             body["system"] = "\n".join(system_parts)
+        # Rev. 14 (§7.2): die neutrale Tool-Spec `{name, description, input_schema}` ist
+        # deckungsgleich mit Anthropics nativem Tool-Schema — kein Umbau nötig, nur reichen.
+        if tools:
+            body["tools"] = tools
         return body
 
+    @staticmethod
+    def _to_native_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Neutrale Tool-Turn-Messages → Anthropic-Content-Blöcke (Rev. 14, §7.2).
+
+        Der Konsument spricht die neutrale/OpenAI-nahe Form (Rolle `tool`,
+        `assistant.tool_calls`); Anthropic kennt nur `tool_use`/`tool_result` als
+        Content-Blöcke. Plain-Text-Messages (nur `role`/`content:str`) bleiben
+        unverändert — der Nicht-Tool-Pfad ist byte-gleich zu Rev. 13.
+
+        **Aufeinanderfolgende Tool-Results einer Runde werden zu EINER `user`-Nachricht
+        zusammengefasst** (Anthropic verlangt alle `tool_result`-Blöcke eines Turns in
+        einer Nachricht; der Hub-Loop hängt sie einzeln an).
+        """
+        out: list[dict[str, Any]] = []
+        pending_results: list[dict[str, Any]] = []
+
+        def _flush() -> None:
+            if pending_results:
+                out.append({"role": "user", "content": list(pending_results)})
+                pending_results.clear()
+
+        for m in messages:
+            role = m.get("role")
+            if role == "system":
+                continue  # geht in den system-Parameter (oben)
+            if role == "tool":
+                pending_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": m.get("tool_call_id", ""),
+                        "content": m.get("content", ""),
+                    }
+                )
+                continue
+            _flush()  # eine Nicht-Tool-Message beendet einen tool_result-Lauf
+            tool_calls = m.get("tool_calls")
+            if role == "assistant" and tool_calls:
+                blocks: list[dict[str, Any]] = []
+                if m.get("content"):
+                    blocks.append({"type": "text", "text": m["content"]})
+                for tc in tool_calls:
+                    blocks.append(
+                        {
+                            "type": "tool_use",
+                            "id": tc.get("id", ""),
+                            "name": tc.get("name", ""),
+                            "input": tc.get("arguments") or {},
+                        }
+                    )
+                out.append({"role": "assistant", "content": blocks})
+            else:
+                out.append({"role": role, "content": m.get("content", "")})
+        _flush()
+        return out
+
     async def complete(
-        self, messages: list[dict[str, Any]], *, model: str, max_tokens: int = 1024
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+        max_tokens: int = 1024,
+        tools: list[dict[str, Any]] | None = None,
     ) -> ProviderResponse:
         client = self._client or httpx.AsyncClient(timeout=PROVIDER_TIMEOUT)
         try:
             resp = await client.post(
                 f"{self._base_url}/v1/messages",
                 headers=self._headers(),
-                json=self._body(messages, model=model, max_tokens=max_tokens),
+                json=self._body(messages, model=model, max_tokens=max_tokens, tools=tools),
             )
             if resp.status_code != 200:
                 raise ProviderError(f"anthropic: HTTP {resp.status_code}: {resp.text[:500]}")
@@ -73,7 +143,24 @@ class AnthropicAdapter:
                 for block in data.get("content", ())
                 if block.get("type") == "text"
             )
-            return ProviderResponse(text=text, model=data.get("model", model), provider=self.name)
+            # Rev. 14: `tool_use`-Blöcke → neutrale ToolCalls. `input` ist bereits ein
+            # Objekt (echte Werte), der Konsument führt das Tool lokal darauf aus.
+            tool_calls = tuple(
+                ToolCall(
+                    id=block.get("id", ""),
+                    name=block.get("name", ""),
+                    arguments=block.get("input") or {},
+                )
+                for block in data.get("content", ())
+                if block.get("type") == "tool_use"
+            )
+            return ProviderResponse(
+                text=text,
+                model=data.get("model", model),
+                provider=self.name,
+                tool_calls=tool_calls,
+                stop_reason=data.get("stop_reason"),
+            )
         finally:
             if self._client is None:
                 await client.aclose()

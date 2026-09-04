@@ -33,6 +33,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from sluice.providers import (
+    TOOL_CAPABLE_PROVIDERS,
     ProviderAdapter,
     ProviderConfigError,
     ProviderError,
@@ -88,6 +89,19 @@ def create_gateway_app(
         if not isinstance(messages, list) or not messages or not model:
             return _error(400, "gateway_bad_request", "Pflichtfelder: messages (nicht leer) und model.")
         max_tokens = int(body.get("max_tokens", 1024))
+        # Rev. 14 (§7.2/§7.4): tools additiv. Nur wenn gesetzt an den Adapter reichen.
+        # Der Kern gatet nicht-tool-fähige Provider bereits (§7.2) — hier steht dieselbe
+        # Prüfung ein zweites Mal, damit ein fehlkonfigurierter Kern eine klare Absage
+        # bekommt statt eines TypeError im Adapter. Doppelt geprüft ist an einer Boundary
+        # kein Makel; still verschluckt wäre einer.
+        tools = body.get("tools") or None
+        if tools and canonical_provider(name) not in TOOL_CAPABLE_PROVIDERS:
+            return _error(
+                400,
+                "gateway_tools_unsupported",
+                f"Provider '{name}' trägt kein Tool-Calling (§7.2) — fail-closed.",
+            )
+        extra = {"tools": tools} if tools else {}
 
         try:
             adapter = adapter_factory(name)
@@ -105,10 +119,23 @@ def create_gateway_app(
 
                 return StreamingResponse(sse(), media_type="text/event-stream")
 
-            response = await adapter.complete(messages, model=model, max_tokens=max_tokens)
-            return JSONResponse(
-                {"text": response.text, "model": response.model, "provider": response.provider}
+            response = await adapter.complete(
+                messages, model=model, max_tokens=max_tokens, **extra
             )
+            result: dict[str, Any] = {
+                "text": response.text,
+                "model": response.model,
+                "provider": response.provider,
+            }
+            # Rev. 14: nur bei tatsächlichen Tool-Calls ergänzen — ohne Tools ist der Body
+            # byte-gleich zu Rev. 13 (§7.4). Der Kern liest beides ohnehin defensiv.
+            if response.tool_calls:
+                result["tool_calls"] = [
+                    {"id": c.id, "name": c.name, "arguments": c.arguments}
+                    for c in response.tool_calls
+                ]
+                result["stop_reason"] = response.stop_reason
+            return JSONResponse(result)
         except ProviderConfigError as exc:
             return _error(500, "gateway_config", str(exc))
         except ProviderError as exc:

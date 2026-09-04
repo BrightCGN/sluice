@@ -17,9 +17,15 @@ from dataclasses import dataclass
 import structlog
 
 from sluice.audit import AuditLog
+from sluice.dialect import messages_carry_tool_artifacts
 from sluice.guard import guarded_egress
 from sluice.policy import Profile
-from sluice.providers import ProviderAdapter, select_egress_adapter
+from sluice.providers import (
+    TOOL_CAPABLE_PROVIDERS,
+    ProviderAdapter,
+    canonical_provider,
+    select_egress_adapter,
+)
 from sluice.modes import EgressPayload, Mode, Scope, select_mode
 
 log = structlog.get_logger("sluice.dispatch")
@@ -41,6 +47,10 @@ class CompletionOutcome:
     # Rev. 12: trägt die Blockade-*Art* aus dem Guard weiter (§5.3). None = Policy-/
     # Verifier-Entscheidung; `mode_unavailable` = ein Modus konnte nicht liefern.
     error_type: str | None = None
+    # Rev. 14 (§7.2): vom Modell angeforderte Tool-Calls (neutral, `{id, name, arguments}`)
+    # und der normalisierte Stop-Grund. None/`"stop"` = kein Tool-Call.
+    tool_calls: list[dict[str, object]] | None = None
+    finish_reason: str | None = None
 
 
 @dataclass
@@ -51,6 +61,25 @@ class StreamOutcome:
     reason: str
     chunks: AsyncIterator[str] | None = None
     error_type: str | None = None  # wie CompletionOutcome (Rev. 12, §5.3)
+
+
+def _tool_capability_reason(payload: EgressPayload, provider_target: str) -> str | None:
+    """Kann der Ziel-Adapter diesen (Tool-)Turn überhaupt abbilden? (§7.2)
+
+    Greift für die deklarierten Specs **und** für einen laufenden Tool-Turn ohne neue
+    Specs (`tool_calls`/`role:"tool"` in den Messages) — sonst ginge eine Konversation an
+    einen Provider, der ihre Form nicht liest. Läuft **vor** dem Guard: ein Audit-Eintrag
+    `released=true` für eine nie gesendete Anfrage wäre ein Prüfbericht über nichts.
+    """
+    if not (payload.tools or messages_carry_tool_artifacts(payload.messages)):
+        return None
+    if canonical_provider(provider_target) in TOOL_CAPABLE_PROVIDERS:
+        return None
+    return (
+        f"Tool-Calling trägt derzeit nur {', '.join(TOOL_CAPABLE_PROVIDERS)}; "
+        f"Provider '{provider_target}' (noch) nicht — fail-closed statt "
+        f"stillem Weglassen (§7.2)."
+    )
 
 
 async def _guard(
@@ -103,7 +132,18 @@ async def guarded_completion(
     adapter: Injektion für Tests; sonst Gateway-Adapter aus `provider_target`
     (§7.3, Rev. 7 — ohne konfiguriertes Gateway fail-closed, nie direkt).
     Blockt der Guard, wird der Adapter NIE berührt (fail-closed, Invariante 2).
+
+    **Tools (Rev. 15, §7.2)** stehen in `payload.tools` — es gibt bewusst keinen
+    Dispatch-Parameter daneben. Damit gibt es keinen Weg, Tools zu senden, ohne dass der
+    Guard sie sieht; die Chokepoint-Eigenschaft ist strukturell und nicht per Konvention
+    (§1). Der Guard verifiziert die Specs als `readonly`-Fläche (geprüft, nie
+    umgeschrieben) — deshalb ist Tool-Calling seit Rev. 15 unter **jedem** Modus möglich,
+    nicht nur unter `passthrough`. Hier bleibt nur die Adapter-Fähigkeit zu prüfen.
     """
+    unsupported = _tool_capability_reason(payload, provider_target)
+    if unsupported is not None:
+        return CompletionOutcome(released=False, reason=unsupported)
+
     messages, chosen, reason, error_type = await _guard(
         profile=profile,
         purpose=purpose,
@@ -117,17 +157,34 @@ async def guarded_completion(
         return CompletionOutcome(released=False, reason=reason, error_type=error_type)
 
     provider = adapter if adapter is not None else select_egress_adapter(provider_target)
-    response = await provider.complete(messages, model=model, max_tokens=max_tokens)
+    extra = {"tools": payload.tools} if payload.tools else {}
+    response = await provider.complete(messages, model=model, max_tokens=max_tokens, **extra)
 
+    effective_scope = scope if scope is not None else _DEFAULT_SCOPE
     text = response.text
     if chosen.reversible:
-        text = await chosen.reverse_text(text, scope if scope is not None else _DEFAULT_SCOPE)
+        text = await chosen.reverse_text(text, effective_scope)
+
+    tool_calls = (
+        [{"id": c.id, "name": c.name, "arguments": c.arguments} for c in response.tool_calls]
+        if response.tool_calls
+        else None
+    )
+    if tool_calls and chosen.reversible:
+        # Tool-Arg-Reversal (§7.2/§8): das Modell hat auf Pseudonymen gearbeitet und gibt
+        # sie in den Argumenten zurück. Der Konsument führt das Tool lokal auf **echten**
+        # Werten aus — bekäme er hier Pseudonyme, während der Antworttext bereits
+        # zurückgemappt ist, wäre die Antwort in sich widersprüchlich und das Tool liefe
+        # auf einem Platzhalter. Dieselbe Modus-Instanz, derselbe Scope wie forward().
+        for call in tool_calls:
+            call["arguments"] = await chosen.reverse_obj(call["arguments"], effective_scope)
 
     log.info(
         "dispatch.completed",
         profile=profile.name if profile else None,
         provider=response.provider,
         model=response.model,
+        tool_calls=len(response.tool_calls),
     )
     return CompletionOutcome(
         released=True,
@@ -135,6 +192,8 @@ async def guarded_completion(
         response_text=text,
         provider=response.provider,
         model=response.model,
+        tool_calls=tool_calls,
+        finish_reason="tool_calls" if tool_calls else "stop",
     )
 
 
@@ -156,7 +215,28 @@ async def guarded_stream(
     Bei pseudonymizing laufen die Deltas durch den Holdback-Puffer des
     `stream_reverser` — ein Pseudonym kann über zwei Chunks reichen
     (kritischer Failure-Mode Streaming-Passthrough).
+
+    **Mit `payload.tools` wird fail-closed abgewiesen** (§7.2): der Stream-Pfad trägt
+    keine `tool_calls`, und der Adapter nähme `tools` gar nicht erst entgegen — die Tools
+    fielen still weg und der Konsument bekäme eine Antwort ohne die Aktionen, die er
+    angeboten hat. Der Tool-Loop läuft ohnehin nicht-streamend (§6.5).
     """
+    if payload.tools:
+        return StreamOutcome(
+            released=False,
+            reason=(
+                "Streaming mit tools wird nicht unterstützt; den Tool-Loop "
+                "nicht-streamend fahren (stream=false) — fail-closed statt "
+                "stillem Weglassen der Tools (§7.2)."
+            ),
+        )
+
+    # Ein Verlauf MIT vergangenen Tool-Turns darf streamen (nur neue `tools` nicht) —
+    # der Ziel-Adapter muss die Form aber lesen können.
+    unsupported = _tool_capability_reason(payload, provider_target)
+    if unsupported is not None:
+        return StreamOutcome(released=False, reason=unsupported)
+
     messages, chosen, reason, error_type = await _guard(
         profile=profile,
         purpose=purpose,

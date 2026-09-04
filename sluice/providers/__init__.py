@@ -39,12 +39,32 @@ class ProviderError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class ToolCall:
+    """Ein vom Modell angeforderter Tool-Aufruf (Rev. 14, §7.2).
+
+    Neutral/provider-agnostisch: der Adapter übersetzt den nativen Call (Anthropic
+    `tool_use`, OpenAI `tool_calls`, …) in diese Form. `arguments` ist bereits ein
+    Objekt (kein JSON-String) — der Konsument führt das Tool lokal darauf aus.
+    """
+
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class ProviderResponse:
-    """Normalisierte Antwort eines Providers — die Fläche, die der Dispatch reverst."""
+    """Normalisierte Antwort eines Providers — die Fläche, die der Dispatch reverst.
+
+    Rev. 14: `tool_calls`/`stop_reason` tragen den Tool-Calling-Rückweg (§7.2). Leer/None
+    = kein Tool-Call (Verhalten bis Rev. 13 unverändert) — beides additiv defaultet.
+    """
 
     text: str
     model: str
     provider: str
+    tool_calls: tuple[ToolCall, ...] = ()
+    stop_reason: str | None = None
 
 
 @runtime_checkable
@@ -54,9 +74,21 @@ class ProviderAdapter(Protocol):
     name: str
 
     async def complete(
-        self, messages: list[dict[str, Any]], *, model: str, max_tokens: int = 1024
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+        max_tokens: int = 1024,
+        tools: list[dict[str, Any]] | None = None,
     ) -> ProviderResponse:
-        """Eine nicht-streamende Completion über sanitisierte Messages."""
+        """Eine nicht-streamende Completion über sanitisierte Messages.
+
+        Rev. 14 (§7.2): `tools` (neutrale Specs `{name, description, input_schema}`)
+        werden — wenn gesetzt — nativ gerendert; ein tool-fähiger Adapter gibt
+        `tool_calls` in der `ProviderResponse` zurück. `tools=None` = Verhalten bis
+        Rev. 13. Nicht jeder Adapter unterstützt Tools (`TOOL_CAPABLE_PROVIDERS`);
+        der Dispatch gatet fail-closed, bevor ein nicht-fähiger Adapter Tools sähe.
+        """
         ...
 
     def stream(
@@ -82,6 +114,15 @@ _ALIASES = {"claude": "anthropic"}
 # Alle kanonischen Provider — eine Quelle für Registry und Gateway-Auswahl, damit ein
 # neuer Provider nicht an einer der beiden Stellen vergessen werden kann.
 CANONICAL_PROVIDERS = ("anthropic", "openai", "gemini", "mistral")
+
+# Provider, deren Adapter Tool-Calling tragen (§7.2). Ein Request MIT `tools` an einen
+# Provider, der hier NICHT steht, wird fail-closed abgewiesen — nie still ohne Tools
+# weitergereicht (ein Chokepoint, der Tools klaglos verschluckt, ist keiner).
+#
+# Rev. 15: alle v1-Adapter. Die Liste bleibt trotzdem **explizit** und ist NICHT
+# `CANONICAL_PROVIDERS`: ein künftiger Adapter ohne Tool-Übersetzung würde sonst allein
+# durch seine Registrierung als tool-fähig gelten und Tools still verschlucken.
+TOOL_CAPABLE_PROVIDERS = ("anthropic", "openai", "mistral", "gemini")
 
 
 def canonical_provider(name: str) -> str:
@@ -148,11 +189,13 @@ def select_egress_adapter(
 __all__ = [
     "CANONICAL_PROVIDERS",
     "PROVIDER_TIMEOUT",
+    "TOOL_CAPABLE_PROVIDERS",
     "ProviderAdapter",
     "canonical_provider",
     "ProviderConfigError",
     "ProviderError",
     "ProviderResponse",
+    "ToolCall",
     "require_api_key",
     "select_egress_adapter",
     "select_provider",

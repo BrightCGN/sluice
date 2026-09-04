@@ -1,6 +1,55 @@
 # Sluice — Boundary- & Contract-Spec (v1)
 
-> **Stand:** 2026-08-11. **Revision 13:** `detector_profile` nimmt **einen Namen oder eine
+> **Stand:** 2026-09-03. **Revision 15: die geprüfte Fläche** — drei zusammengehörige
+> Korrekturen an *einer* Frage: welchen Text sieht der Verifier überhaupt?
+> **(a) §5.5 (neu) — jede Content-Fläche wird geprüft, nicht nur `content:str`.** Block-Listen,
+> Tool-Result-Inhalte und Tool-Argumente liefen bis hierher **unredigiert und unverifiziert**
+> durch, während das Audit `released=true` meldete. Kein Ausfall, der blockiert, sondern ein
+> Durchlass, den niemand sah — dieselbe Klasse wie die stille Kürzung (§5.3) und ab jetzt
+> genauso behandelt: was sich nicht als Textfläche aufzählen lässt (Bilder, unbekannte
+> Blocktypen), **blockiert** unter jedem Modus mit Verifier.
+> **(b) Tool-Specs sind geprüfte Fläche** (§7.2). Sie stehen jetzt im **Guard-Payload**
+> (`EgressPayload.tools`) statt als Dispatch-Parameter daneben — es gibt damit keinen Weg,
+> Tools zu senden, ohne dass der Guard sie sieht; die Chokepoint-Eigenschaft ist strukturell,
+> nicht per Konvention (§1). Verifiziert werden sie als `readonly` (geprüft, nie
+> umgeschrieben). **Damit ist Tool-Calling unter *jedem* Modus möglich** — die Rev.-14-Grenze
+> „nur unter `passthrough`" ist aufgehoben, und der Fall, für den Sluice gebaut ist
+> (agentische Konsumenten unter `strict`), ist kein Passthrough-Fall mehr.
+> **(c) Beide Dialekte am Endpoint** (§7.2). `/v1/chat/completions` nimmt die neutrale *und*
+> die OpenAI-Tool-Form an und antwortet in dem Dialekt, in dem die Anfrage kam. Die
+> Übersetzung sitzt allein in `sluice/dialect.py` und läuft **vor** dem Guard, damit
+> Tool-Argumente als aufgelöste Werte geprüft und redigiert werden statt als undurchsichtiger
+> JSON-String. Ohne diese Schicht ist Sluice für genau die Konsumenten unerreichbar, für die
+> es gebaut ist — wer den Endpoint als „OpenAI-kompatiblen Provider" einträgt, spricht diesen
+> Dialekt. **Fail-closed bleibt, wo Sluice eine Zusage nicht einlösen kann:** nicht-tool-fähiger
+> Provider, Streaming mit Tools (§6.5), erzwungenes `tool_choice`.
+> **(d) Tool-Calling in *allen* v1-Adaptern** (§7.3) — `anthropic`, `openai`, `mistral`,
+> `gemini`. Rev. 14 hatte nur `anthropic`; damit wäre jeder agentische Konsument faktisch
+> Claude-only gewesen, und die Provider-Allowlist (§4.1) hätte für Tool-Turns nur einen
+> Eintrag zur Wahl gehabt. Für die OpenAI-Familie ist „nativ" derselbe Dialekt wie am
+> Endpoint — dieselben Funktionen, keine zweite Abbildung, die auseinanderlaufen kann.
+> `gemini` braucht eine echte Übersetzung samt Auflösung `tool_call_id → Tool-Name`; ist
+> sie nicht möglich, wird **blockiert** statt geraten.
+>
+> **Bewusst noch offen:** Streaming von `tool_calls` (§6.5 — der Loop läuft
+> nicht-streamend) und ein erzwingendes `tool_choice`. Beides wird abgewiesen, nicht
+> stillschweigend ignoriert.
+>
+> **Revision 14:** **Tool-Calling wird erstklassig im Proxy- und
+> Adapter-Vertrag** (§7.2/§7.3). Der §7.2-Endpoint nimmt optional `tools` (neutrale Specs
+> `{name, description, input_schema}`) entgegen und gibt `tool_calls` (neutral,
+> `{id, name, arguments}`) + `finish_reason` zurück; Adapter-Interface (§7.3) und interner
+> Kern→Gateway-Vertrag `/v1/complete` (§7.4) tragen beides mit. **Additiv/rückwärts­kompatibel:**
+> ohne `tools` ist das Verhalten byte-gleich zu Rev. 13. ~~**Fail-closed-Grenze:** Tools sind nur
+> unter einem Modus *ohne* Verifier (`passthrough`, `enforce_verifier=false`) freigegeben~~
+> — **durch Rev. 15 (b) ersetzt:** die Specs sind jetzt selbst geprüfte Fläche, Tool-Calling
+> läuft unter jedem Modus. Bestehen bleibt: ein nicht-tool-fähiger Provider
+> (`TOOL_CAPABLE_PROVIDERS`) mit `tools` wird **blockiert**, nie still ohne Tools
+> weitergereicht — ein Chokepoint, der Tools klaglos verschluckt, ist keiner. Der Konsument
+> fährt den agentischen Loop weiter (führt Tools lokal aus, ruft pro Runde erneut) — Keys und
+> Provider-Call bleiben in Sluice. Erster Durchstich: Adapter `anthropic`, nicht-streamend
+> (der Loop läuft ohnehin nicht-streamend, §6.5); Streaming von `tool_calls` und weitere Adapter
+> folgen additiv. **Revision 13:** `detector_profile` nimmt **einen Namen oder eine
 > Liste** (§5.1). Grund: ein Profil braucht regelmäßig *beides* — die Muster seiner Domäne
 > und die deutschen PII-Muster. `media` allein kennt keine IBAN, `pii_de` allein keine
 > NAS-Pfade; wer sich entscheiden muss, tauscht Schutz in der eigenen Domäne gegen Schutz
@@ -647,6 +696,49 @@ Entitätstyp, Kalibrierung auf einem separaten Dev-Split. Verfahren, Kandidaten 
 offenen Messungen: `docs/NER-SERVICE.md`, Skripte `scripts/probe_ner_hardware.py` und
 `scripts/eval_ner.py`.
 
+### 5.5 Die geprüfte Fläche: was der Verifier überhaupt sieht (Rev. 15)
+
+Alle Zusagen der §§2–5.4 hängen an einer Frage, die bis Rev. 14 nirgends beantwortet war:
+**welchen Text prüft der Verifier eigentlich?** Der Proxy-Vertrag (§7.2) spricht von
+`messages` — aber `content` ist in der Praxis nicht immer ein String. Anthropic und OpenAI
+schicken Block-Listen (`[{"type":"text","text":…}]`), ein Tool-Result trägt seinen Inhalt
+in `content`, ein Assistant-Turn seine Tool-Argumente in `tool_calls`. Wer nur
+`isinstance(content, str)` prüft, **redigiert diese Flächen nicht und legt sie dem Verifier
+nie vor** — der Egress geht mit `released=true` raus, obwohl nur ein Teil geprüft wurde.
+
+Das ist dieselbe Klasse wie die stille Kürzung im NER-Pfad (§5.3): **kein Ausfall, der
+blockiert, sondern ein Durchlass, den niemand sieht.** Ein Ausfall meldet sich; eine nicht
+betrachtete Fläche meldet sich nie, und das Audit behauptet trotzdem, geprüft zu haben.
+Deshalb gilt hier dieselbe Regel wie dort.
+
+**Drei Kategorien** (`sluice/content.py`), aufgezählt über **einen** Walker, der zugleich
+das Wiedereinsetzen macht — Prüfung und Redaktion können damit strukturell nicht
+auseinanderlaufen, so wie `pii_ner` die Regex-Stufe strukturell nicht verlieren kann (§5.3):
+
+| Kategorie | Was | Behandlung |
+|---|---|---|
+| `texts` | `content:str`, Text-Blöcke (`text`/`input_text`/`output_text`), Tool-Result-Inhalte (auch verschachtelt), **Werte** in Tool-Argumenten | geprüft **und** redigiert |
+| `readonly` | **Schlüssel** von Tool-Argument-Objekten, die deklarierten **Tool-Specs** (§7.2) | geprüft, nie umgeschrieben |
+| `opaque` | Bilder, Audio, unbekannte Blocktypen, nicht aufzählbare Formen | **blockiert** unter jedem Modus mit Verifier |
+
+**Warum `readonly` und nicht einfach redigieren.** Zwei Schlüssel, die auf denselben
+Platzhalter fallen, würden zu einem verschmelzen und ein Feld still verschlucken — eine
+stille Kürzung als „Fix" wäre schlimmer als das Loch. Und ein redigierter Tool-**Name**
+passt zu keinem deklarierten Tool mehr. Steht in einer solchen Fläche ein Identifier, ist
+das ein Fehler des Konsumenten: dann **blockiert** der Verifier, statt still etwas
+zurechtzubiegen (fail-closed statt stiller Korrektur).
+
+**Warum `opaque` blockiert.** Der Verifier ist ein *Text*-Riegel. Was er nicht lesen kann,
+kann er nicht freigeben; ein Bild einer Meldeadresse ist genau der Egress, den `strict`
+zusagt zu verhindern. Die Regel greift generisch über `enforce_verifier` (§3), nicht an
+Blocktyp-Namen: `passthrough` lässt solche Flächen bewusst durch (§2.1) — dort ist es die
+erklärte Konsumenten-Entscheidung, nicht ein Loch.
+
+**Konsequenz für Adapter:** ein Adapter, der eine Content-Form nicht abbilden kann, **meldet
+das** (`ProviderError`), statt die Message zu überspringen. Eine übersprungene Message käme
+beim Modell nie an, obwohl sie die Boundary passiert hat und das Audit `released=true`
+protokolliert — der Prüfbericht spräche über etwas anderes als das Gesendete.
+
 ---
 
 ## 6. Audit (`egress_log`, append-only)
@@ -667,6 +759,12 @@ heutiges `TODO(post-v1)` in `guard.py::_log_egress` in Sluice ein.
 Wo geschrieben wird, ist der Sink **append-only** (Prinzip 13). Der Detailgrad ist eine
 *Betriebs*-Einstellung und **verändert den Sanitisierungs-Modus nicht** — `strict` bleibt
 `strict`, auch wenn der Betreiber `off` fährt.
+
+**Tool-Calling (Revision 14):** die gesendeten `tools` (Egress) und die zurückgegebenen
+`tool_calls` (die vom Modell angeforderten Aktionen — ihre `arguments` können Identifikatoren
+tragen) sind neuer Inhalt: `full` gehört ins reviewbare Vorher/Nachher, `metadata` zählt die
+Runde. (Rev. 14 stand hier „Modus ist stets `passthrough`" — seit Rev. 15 kann jeder
+Modus Tool-Turns fahren, der Audit-Eintrag führt den tatsächlich gewählten.)
 
 ---
 
@@ -724,6 +822,57 @@ Sluice-intern:  forward(scope) → verify → Provider-Adapter (§7.3) → strea
 2. **Tool-Call-Passthrough** — Tool-Argumente müssen vor Ausführung zurückgemappt werden
    (`reverse_obj`), sonst bekommt das lokale Tool Pseudonyme statt echter Werte.
 
+**Tool-Calling im Proxy-Vertrag (Revision 14, erweitert in Revision 15).** Bis Rev. 13 blieb
+die Tool-Passthrough-Zusage (oben) unimplementiert — die v1-Adapter waren rein textuell.
+Rev. 14 macht sie zum expliziten, **modus-übergreifenden** Bestandteil des §7.2-Vertrags;
+Rev. 15 nimmt ihr die Beschränkung auf `passthrough` und öffnet den Endpoint für beide
+Dialekte:
+
+```
+POST /v1/chat/completions
+  Body:   { messages, model, provider?, stream?, mode?, tool_choice?,
+            tools?: [ {name, description, input_schema}                    # neutral
+                    | {type:"function", function:{name, description, parameters}} ] }  # OpenAI
+
+→ 200 { …, "choices":[{ "message":{ role, content,
+                          # im Dialekt der ANFRAGE (Rev. 15):
+                          "tool_calls":[{id, name, arguments}]?            # neutral
+                                    | [{id, type:"function",
+                                        function:{name, arguments:"<json>"}}]? },  # OpenAI
+                        "finish_reason": "tool_calls" | "stop" | "length" }] }
+```
+
+- **Der Kern ist neutral, der Endpoint spricht beide Dialekte (Rev. 15).** Intern trägt `tools`
+  `{name, description, input_schema}` und `tool_calls` `{id, name, arguments}` (`arguments` ist ein
+  **Objekt**, kein JSON-String). Am Endpoint wird zusätzlich die OpenAI-Form angenommen
+  (`{type:"function", function:{name, description, parameters}}` bzw. `function.arguments` als
+  JSON-String) — **die Antwort kommt im Dialekt der Anfrage.** Symmetrie statt Schalter: kein
+  zusätzliches Feld, das man vergessen kann, und keine Vermutung über den Aufrufer. Ohne diese
+  Schicht wäre Sluice für genau die Konsumenten unerreichbar, für die es gebaut ist — wer den
+  Endpoint als „OpenAI-kompatiblen Provider" einträgt, spricht diesen Dialekt.
+  Die Übersetzung liegt **allein** in `sluice/dialect.py` und läuft **vor** dem Guard: nur so
+  sieht der Verifier die Tool-Argumente als aufgelöste Werte statt als undurchsichtigen
+  JSON-String (§5.5). Alles hinter dem Endpoint — Guard, Modi, Verifier, Audit, Adapter —
+  kennt nur die neutrale Form; der Adapter (§7.3) übersetzt sie ins native Provider-Schema.
+- **`tools` sind Egress-Inhalt, kein Sonderfall.** Sie stehen deshalb **im Guard-Payload**
+  (`EgressPayload.tools`), nicht als Parameter daneben: es gibt keinen Weg, Tools zu senden,
+  ohne dass der Guard sie sieht. Der Guard verifiziert sie als **`readonly`**-Fläche (§5.5) —
+  geprüft, nie umgeschrieben, weil ein redigierter Tool-Name zu keinem deklarierten Tool mehr
+  passt und ein Schema mit Platzhaltern im Typ kaputt ist. Steht ein Identifier in einer Spec,
+  **blockiert** der Verifier; das ist ein Konsumenten-Fehler, keine Sanitisierungs-Aufgabe.
+  **Damit läuft Tool-Calling unter jedem Modus**, nicht nur unter `passthrough`.
+- **Der Loop bleibt beim Konsumenten.** Sluice liefert pro Runde die `tool_calls`; der Konsument
+  führt die Tools lokal auf **echten** Werten aus, hängt `tool`-Results an und ruft erneut. Keys und
+  Provider-Call bleiben in Sluice — die Egress-Grenze wandert nicht zum Konsumenten. Unter
+  `pseudonymizing` sieht der Konsument Pseudonyme und mappt sie per `reverse_obj` zurück (oben);
+  unter `strict`/`pii_*` sind die Argumente im Folge-Turn redigiert — das ist gewollt und der
+  Preis dafür, dass ein Tool-Argument kein Schleichweg an der Boundary vorbei ist.
+- **Fail-closed bleibt, wo Sluice eine Zusage nicht einlösen kann** — nie stilles Weglassen:
+  ein Provider außerhalb `TOOL_CAPABLE_PROVIDERS`; **Streaming (`stream:true`) mit `tools`**
+  (der Loop läuft ohnehin nicht-streamend, §6.5); ein **`tool_choice`, das ein Tool erzwingt**
+  (`auto`/`none` sind folgenlos und gehen durch). In allen drei Fällen bekäme der Konsument
+  sonst eine Antwort ohne die Aktionen, die er angeboten hat, und merkte es nicht.
+
 ### 7.3 Provider-Adapter in Sluice (Revision 2)
 Sluice spricht die Provider direkt an. Ein Adapter pro Provider hinter demselben
 Verifier/Gate; neuer Provider = ein weiterer Adapter, ohne Guard/Verifier/Audit anzufassen.
@@ -744,6 +893,31 @@ Die Allowlist (§4.1) begrenzt pro Profil, welche erlaubt sind.
   lange) — wie im übrigen Code.
 - **Antwortpfad:** bei `pseudonymizing` läuft die Provider-Antwort durch `reverse_text` /
   `stream_reverser` / `reverse_obj` derselben Modus-Instanz (Scope-Konsistenz, §8).
+- **Tool-Calling (Revision 14, alle Adapter ab Revision 15):** `complete(..., tools=None)` —
+  der Adapter rendert die neutrale Spec `{name, description, input_schema}` in das native
+  Schema seines Providers und gibt native Tool-Calls als neutrale `ToolCall`s
+  (`{id, name, arguments}`) in der `ProviderResponse` zurück:
+
+  | Adapter | Specs | Calls | Results | Besonderheit |
+  |---|---|---|---|---|
+  | `anthropic` | `tools` | `tool_use` | `tool_result`-Blöcke | neutrale Spec **ist** das native Schema, kein Umbau; Results einer Runde in *einer* Message |
+  | `openai`/`mistral` | `tools` | `tool_calls` | `role:"tool"` | nativ = der OpenAI-Dialekt ⇒ **dieselbe** Abbildung wie am Endpoint (`sluice/dialect.py`), nicht eine zweite |
+  | `gemini` | `functionDeclarations` | `functionCall` | `functionResponse` | echte Übersetzung, zwei Eigenheiten (unten) |
+
+  **Gemini, zwei Eigenheiten.** (1) Es adressiert ein Result über den **Tool-Namen**, die
+  neutrale Form über die `tool_call_id`; der Adapter löst den Namen aus den vorangegangenen
+  `tool_calls` auf und **blockt fail-closed**, wenn das nicht geht — ein falsch zugeordnetes
+  Tool-Result ist schlimmer als ein Fehler. (2) Es vergibt **keine Call-ID**; Sluice erzeugt
+  sie deterministisch aus Name und Position, weil der neutrale Vertrag eine braucht. Der
+  Konsument schickt genau diese ID zurück, wo sie wieder zum Namen aufgelöst wird — der Kreis
+  schließt sich in Sluice, ohne dass Gemini je eine ID sieht.
+
+  Welche Adapter Tools tragen, führt `TOOL_CAPABLE_PROVIDERS`. Die Liste bleibt **explizit**
+  und ist bewusst *nicht* `CANONICAL_PROVIDERS`: ein künftiger Adapter ohne Tool-Übersetzung
+  würde sonst allein durch seine Registrierung als tool-fähig gelten und Tools still
+  verschlucken. Ein Request mit `tools` an einen nicht gelisteten Provider wird fail-closed
+  abgewiesen (§7.2), nie ohne Tools weitergereicht — und dieselbe Prüfung steht ein zweites
+  Mal im Gateway (§7.4), damit ein fehlkonfigurierter Kern eine klare Absage bekommt.
 - **Failover/Health/Tenant-Order:** *(post-v1)* — v1 ruft genau den einen per Profil
   erlaubten und vom Konsumenten gewählten Provider.
 - **Eigenständige Gateway-Services (Revision 6):** jedes Provider-Gateway ist ein
@@ -753,8 +927,10 @@ Die Allowlist (§4.1) begrenzt pro Profil, welche erlaubt sind.
   Kern kennt ein Gateway nur über `SLUICE_GATEWAY_<PROVIDER>_URL` und braucht dann selbst
   **keinen Provider-Key** (Key-Isolation: jedes Gateway hält nur seinen eigenen).
   Interner Vertrag Kern → Gateway (versioniert, §7.4): `POST /v1/complete`
-  (messages/model/max_tokens[/stream] → `{text, model, provider}` bzw. SSE
-  `data: {"delta": …}` + `[DONE]`), `GET /v1/health`.
+  (messages/model/max_tokens[/stream][/**tools** Rev. 14] → `{text, model, provider`
+  [`, tool_calls, stop_reason` Rev. 14]`}` bzw. SSE `data: {"delta": …}` + `[DONE]`),
+  `GET /v1/health`. `tools`/`tool_calls` sind additiv: fehlen sie, ist der Body
+  byte-gleich zu Rev. 13 (ein Gateway ohne Rev.-14-Kenntnis bleibt kompatibel).
   **Die Boundary bleibt im Kern:** ein Gateway wird ausschließlich vom Dispatch aufgerufen,
   *nachdem* `guarded_egress` released hat — es sieht nie Rohtext und ist **nie direkt von
   Konsumenten erreichbar** (Firewall: eingehend nur vom Sluice-Kern; optional Shared Secret

@@ -118,6 +118,8 @@ sluice/
   policy.py              # Profil-Schema + check_egress_allowed
   verifier.py            # deterministischer Riegel; Muster aus Detektor-Profilen
   audit.py               # egress_log, append-only
+  content.py             # Content-Flächen einer Message: aufzählen + ersetzen (Rev. 15, §5.5)
+  dialect.py             # neutral ↔ OpenAI-Tool-Dialekt; die EINZIGE Stelle mit Dialekt (Rev. 15)
   spans.py               # Span-Mechanik: Offsets, Vereinigung, Redaktion (Rev. 12, §5.3)
   identity.py            # Anonymisierungs-Identität: Modell + Schwellwert (Rev. 12, §5.4)
   errors.py              # ModeUnavailableError — Blatt-Modul ohne Importe
@@ -146,6 +148,7 @@ sluice/
     mistral.py           # Mistral AI
     gemini.py            # Google Gemini (generateContent)
     remote.py            # Kern → Gateway-Service (SLUICE_GATEWAY_<P>_URL, Rev. 6)
+                         # Tool-Calling tragen ab Rev. 15 ALLE Adapter (TOOL_CAPABLE_PROVIDERS)
 docs/
   SLUICE-BOUNDARY-SPEC.md  # Wahrheitsquelle
   NER-SERVICE.md           # NER-Betrieb, Messung, Evaluation (Rev. 12)
@@ -195,6 +198,13 @@ tests/                   # kein Netz; httpx.MockTransport wo HTTP nötig
   graceful degradation, kein Überspringen bei fehlender URL. Ein Chokepoint, der bei Ausfall
   durchlässiger wird, ist kein Chokepoint. Ebenso: **kein dynamisches Batching** (Determinismus,
   §5.4) und **kein generatives LLM** für die Erkennung.
+- **Die geprüfte Fläche ist die ganze Fläche (Rev. 15, §5.5).** `content` ist nicht immer ein
+  String: Block-Listen, Tool-Result-Inhalte und Tool-Argumente sind ebenso Egress. Nie
+  `isinstance(content, str)` als Filter benutzen — immer `sluice/content.py`, damit Aufzählung
+  und Redaktion über denselben Walker laufen und nicht auseinanderdriften. Was sich nicht als
+  Textfläche aufzählen lässt (Bild, unbekannter Blocktyp), **blockiert** unter jedem Modus mit
+  Verifier; ein Adapter, der eine Form nicht abbilden kann, **meldet das**, statt die Message
+  zu überspringen. Ein Durchlass, den niemand sieht, ist schlimmer als ein Ausfall.
 - **Keine stille Kürzung.** Das Modell hat ein festes Token-Fenster und kürzt längere Eingaben
   *ohne Fehler* — es sieht den hinteren Teil nie. Das ist gefährlicher als ein Ausfall: ein
   Ausfall blockiert, eine Kürzung lässt durch, und das Audit meldet `released=true` für einen

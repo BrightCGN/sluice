@@ -25,6 +25,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from sluice.content import Surfaces, messages_surfaces
 from sluice.policy import Profile
 
 
@@ -43,11 +44,16 @@ class EgressPayload:
     generalized_text: generalizing: der vom Konsumenten *semantisch generalisierte*
                       Text (die Generalisierung ist Konsumenten-Domäne, §1.1 — NICHT Sluice).
     messages:         pseudonymizing: role/content-Message-Liste (Proxy-Form, §7.2).
+    tools:            die vom Konsumenten deklarierten Tool-Specs (neutral, §7.2, Rev. 15).
+                      Sie stehen HIER und nicht als Dispatch-Parameter, damit es keinen
+                      Weg gibt, Tools zu senden, ohne dass der Guard sie sieht — die
+                      Chokepoint-Eigenschaft ist strukturell, nicht per Konvention (§1).
     """
 
     raw_text: str
     generalized_text: str | None = None
     messages: list[dict[str, Any]] | None = None
+    tools: list[dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)
@@ -57,16 +63,18 @@ class Sanitized:
     text: str | None = None
     messages: list[dict[str, Any]] | None = None
 
-    def texts(self) -> list[str]:
-        """Alle Textflächen, die der Verifier prüfen muss (§5)."""
-        out: list[str] = []
-        if self.text is not None:
-            out.append(self.text)
-        for m in self.messages or ():
-            content = m.get("content")
-            if isinstance(content, str):
-                out.append(content)
-        return out
+    def surfaces(self) -> Surfaces:
+        """Alle Flächen, die der Verifier prüfen muss (§5/§5.5).
+
+        Nicht nur `content:str`: Block-Listen, Tool-Result-Inhalte und Tool-Argumente
+        gehören dazu (`sluice/content.py`). Was sich nicht aufzählen lässt, kommt als
+        `opaque` zurück — darauf blockiert der Guard fail-closed, statt es ungeprüft
+        durchzulassen.
+        """
+        base = Surfaces(texts=(self.text,)) if self.text is not None else Surfaces()
+        if self.messages is None:
+            return base
+        return base.merge(messages_surfaces(self.messages))
 
 
 class StreamReverserProtocol(Protocol):

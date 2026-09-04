@@ -26,6 +26,7 @@ from sluice.providers import (
     ProviderConfigError,
     ProviderError,
     ProviderResponse,
+    ToolCall,
 )
 
 log = structlog.get_logger("sluice.providers.remote")
@@ -58,22 +59,42 @@ class RemoteGatewayAdapter:
         raise ProviderError(f"gateway {self.name}: HTTP {status}: {detail[:500]}")
 
     async def complete(
-        self, messages: list[dict[str, Any]], *, model: str, max_tokens: int = 1024
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+        max_tokens: int = 1024,
+        tools: list[dict[str, Any]] | None = None,
     ) -> ProviderResponse:
         client = self._client or httpx.AsyncClient(timeout=PROVIDER_TIMEOUT)
+        body: dict[str, Any] = {"messages": messages, "model": model, "max_tokens": max_tokens}
+        # Rev. 14 (§7.2/§7.4): tools additiv an den internen Vertrag; fehlt es, ist der
+        # Body byte-gleich zu Rev. 13 (ein Gateway ohne Rev.-14-Kenntnis bleibt kompatibel).
+        if tools:
+            body["tools"] = tools
         try:
             resp = await client.post(
                 f"{self._base_url}/v1/complete",
                 headers=self._headers(),
-                json={"messages": messages, "model": model, "max_tokens": max_tokens},
+                json=body,
             )
             if resp.status_code != 200:
                 self._raise_for_error(resp.status_code, resp.text)
             data = resp.json()
+            tool_calls = tuple(
+                ToolCall(
+                    id=tc.get("id", ""),
+                    name=tc.get("name", ""),
+                    arguments=tc.get("arguments") or {},
+                )
+                for tc in data.get("tool_calls") or ()
+            )
             return ProviderResponse(
                 text=data.get("text", ""),
                 model=data.get("model", model),
                 provider=data.get("provider", self.name),
+                tool_calls=tool_calls,
+                stop_reason=data.get("stop_reason"),
             )
         finally:
             if self._client is None:

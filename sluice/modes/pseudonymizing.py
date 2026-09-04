@@ -22,6 +22,7 @@ from typing import Any
 
 import structlog
 
+from sluice.content import message_surfaces, rebuild_message
 from sluice.modes import EgressPayload, Sanitized, Scope
 
 log = structlog.get_logger("sluice.modes.pseudonymizing")
@@ -185,12 +186,18 @@ class ScopeMap:
         return "".join(out)
 
     def forward_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Pseudonymisiert die ``content``-Strings von role/content-Messages."""
+        """Pseudonymisiert **jede** Textfläche der Messages, nicht nur `content:str` (§5.5).
+
+        Block-Listen, Tool-Result-Inhalte und Tool-Argumente laufen durch dasselbe
+        Mapping wie gewöhnlicher Text — sonst stünde in einem Tool-Argument der rohe
+        Wert, während `content` pseudonymisiert ist. Der Rückweg (`reverse_obj`, §7.2)
+        setzt sie über dieselbe Tabelle wieder ein.
+        """
         out = []
         for m in messages:
-            content = m.get("content")
-            if isinstance(content, str):
-                m = {**m, "content": self.forward_text(content)}
+            surfaces = message_surfaces(m)
+            if surfaces.texts:
+                m = rebuild_message(m, [self.forward_text(t) for t in surfaces.texts])
             out.append(m)
         return out
 

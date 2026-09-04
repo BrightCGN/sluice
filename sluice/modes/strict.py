@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from sluice.content import message_surfaces, rebuild_message
 from sluice.modes import EgressPayload, Sanitized, Scope, StreamReverserProtocol
 from sluice.verifier import redact_identifiers
 
@@ -50,10 +51,16 @@ class StrictMode:
         )
 
     def _redact_message(self, message: dict[str, Any]) -> dict[str, Any]:
-        content = message.get("content")
-        if not isinstance(content, str):
+        """Redigiert **jede** Textfläche der Message, nicht nur `content:str` (§5.5).
+
+        Block-Listen, Tool-Result-Inhalte und Tool-Argumente gehören dazu — sonst ginge
+        genau dort ungeprüfter Inhalt raus (`sluice/content.py`). Flächen, die sich nicht
+        aufzählen lassen, bleiben hier unangetastet und blockieren im Guard fail-closed.
+        """
+        surfaces = message_surfaces(message)
+        if not surfaces.texts:
             return message
-        return {**message, "content": self._redact(content)}
+        return rebuild_message(message, [self._redact(t) for t in surfaces.texts])
 
     async def reverse_text(self, text: str, scope: Scope) -> str:
         raise NotImplementedError("StrictMode ist irreversibel (Auto-Redaktion, §3).")

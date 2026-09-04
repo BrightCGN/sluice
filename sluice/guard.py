@@ -17,6 +17,7 @@ Herkunft: Tempers egress/guard.py, mit eingezogenem Modus-Aufruf (statt fest gen
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,6 +25,7 @@ import structlog
 
 from sluice.audit import AuditLog
 from sluice.audit import egress_log as _default_audit
+from sluice.content import tool_surfaces
 from sluice.errors import ModeUnavailableError
 from sluice.policy import (
     Profile,
@@ -73,6 +75,18 @@ async def guarded_egress(
     audit_log = audit if audit is not None else _default_audit
     mode_name = profile.mode if profile is not None else None
 
+    def _with_tools(text: str) -> str:
+        """Tool-Specs sind gesendeter Inhalt und gehören ins reviewbare Vorher/Nachher (§6).
+
+        Sie stehen unverändert in beiden — der Modus schreibt sie nicht um (§7.2) —, aber
+        wer den Audit-Eintrag liest, muss sehen, *was* an Tools rausging; sonst zeigt das
+        Log einen Egress ohne die Aktionen, die er dem Modell anbietet.
+        """
+        if not payload.tools:
+            return text
+        rendered = json.dumps(payload.tools, ensure_ascii=False, sort_keys=True)
+        return f"{text}\n[tools] {rendered}" if text else f"[tools] {rendered}"
+
     def _blocked(
         reason: str, findings: tuple[str, ...] = (), *, error_type: str | None = None
     ) -> EgressOutcome:
@@ -82,7 +96,7 @@ async def guarded_egress(
             mode=mode_name,
             released=False,
             reason=reason,
-            before=payload.raw_text,
+            before=_with_tools(payload.raw_text),
             after=None,
             provider_target=provider_target,
             verifier_findings=findings,
@@ -133,22 +147,39 @@ async def guarded_egress(
             error_type="mode_unavailable",
         )
 
-    texts = sanitized.texts()
-    if not texts:
-        return _blocked("Kein Egress-Kandidat vorhanden (fail-closed).")
+    surfaces = sanitized.surfaces()
+
+    # Die deklarierten Tool-Specs sind ebenfalls ausgehender Inhalt (Rev. 15, §7.2) und
+    # gehören in dieselbe geprüfte Fläche. Sie laufen NICHT durch den Modus — sie werden
+    # geprüft, aber nie umgeschrieben (`readonly`, siehe `content.tool_surfaces`).
+    if payload.tools:
+        surfaces = surfaces.merge(tool_surfaces(payload.tools))
 
     # 3. Deterministischer Riegel — nur wenn der Modus ihn komponiert (Rev. 9, §5).
     #    `strict`/`generalizing`/`pseudonymizing`: fail-closed. `passthrough`: bewusst
     #    ohne Verifier — der Konsument trägt das Risiko (§2.1).
     if chosen.enforce_verifier:
+        # 3a. Nicht aufzählbare Content-Flächen (Rev. 15, §5.5): Bilder, Audio, unbekannte
+        #     Blocktypen. Der Verifier ist ein *Text*-Riegel — was er nicht lesen kann, kann
+        #     er nicht freigeben. Durchreichen hieße: `released=true` für einen nur teilweise
+        #     geprüften Egress. Das ist dieselbe Klasse wie die stille Kürzung (§5.3) und
+        #     wird genauso behandelt — blockieren, nicht überspringen.
+        if surfaces.opaque:
+            return _blocked(
+                f"Nicht prüfbare Content-Fläche(n) unter Modus '{chosen.name}' "
+                f"(fail-closed, §5.5): {', '.join(surfaces.opaque)}."
+            )
         findings: list[str] = []
-        for text in texts:
+        for text in surfaces.verifiable:
             verification = verify_no_identifiers(
                 text, profile.detector_profile, dictionary_terms=profile.dictionary_terms
             )
             findings.extend(verification.findings)
         if findings:
             return _blocked(f"Verifier blockiert: {', '.join(findings)}", tuple(findings))
+
+    if not surfaces:
+        return _blocked("Kein Egress-Kandidat vorhanden (fail-closed).")
 
     # 4. Durchlass — protokollieren nach Betreiber-Audit-Level (Invariante-3-Verhalten, §6).
     audit_log.append(
@@ -157,8 +188,8 @@ async def guarded_egress(
         mode=chosen.name,
         released=True,
         reason="clean",
-        before=payload.raw_text,
-        after="\n".join(texts),
+        before=_with_tools(payload.raw_text),
+        after=_with_tools("\n".join(surfaces.texts)),
         provider_target=provider_target,
     )
     return EgressOutcome(
