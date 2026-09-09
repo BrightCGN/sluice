@@ -213,9 +213,23 @@ def select_mode(profile: Profile) -> Mode:
     if factory is None:  # fail-closed: unbekannter Modus ist ein Konfigurationsfehler
         raise ValueError(f"Unbekannter Modus '{profile.mode}' in Profil '{profile.name}'.")
 
-    # Cache-Key enthält den Modus: ein Request-`mode`-Override (§7.2) desselben Profils
-    # darf nie die Instanz eines anderen Modus erwischen.
-    cache_key = f"{profile.name}:{profile.mode}"
+    # Cache-Key = Name + **Anonymisierungs-Identität** (§5.4). Der Modus steckt darin;
+    # ein Request-`mode`-Override (§7.2) desselben Profils erwischt also nie die Instanz
+    # eines anderen Modus.
+    #
+    # Warum die ganze Identität und nicht nur der Modus-Name: sie ist genau die Menge der
+    # Werte, die das Sanitisierungs-Ergebnis verändern (Detektor-Profil, Wörterbuch-
+    # Digest, NER-Modell/Schwellwert). Ein Schlüssel aus `name:mode` allein würde zwei
+    # verschieden konfigurierte Profile *gleichen Namens* für dasselbe halten — wer ein
+    # Profil nachschärft (etwa `dictionary_terms` ergänzt) und die Profile neu lädt,
+    # bekäme weiter die alte, laxere Instanz. Ein Riegel, der eine Verschärfung nicht
+    # übernimmt, ist an dieser Stelle so schlecht wie einer, der sie nie hatte.
+    #
+    # `reversible` gehört mit hinein, obwohl es die Identität nicht berührt: Scope und
+    # TTL bestimmen den Mapping-Lebenszyklus (§8) und damit den Zustand der Instanz.
+    rev = profile.reversible
+    rev_key = f"{rev.scope}/{rev.ttl_seconds}/{rev.storage}" if rev is not None else "-"
+    cache_key = f"{profile.name}:{profile.anonymization_identity().digest()}:{rev_key}"
     cached = _instances.get(cache_key)
     if cached is not None:
         return cached

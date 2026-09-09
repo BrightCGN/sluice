@@ -9,7 +9,8 @@ jeden anderen erst *nach* `released=true` (Invariante 2).
 
 Interner Vertrag Kern → Gateway: `POST {base}/v1/complete`
 (Body: messages/model/max_tokens[/stream]; optional Shared-Secret-Header
-`X-Sluice-Gateway-Token` aus `SLUICE_GATEWAY_TOKEN`).
+`X-Sluice-Gateway-Token` aus `SLUICE_GATEWAY_TOKEN`). Seit Rev. 16 trägt die Antwort
+zusätzlich `usage`/`rate_limit` (§7.6) — additiv, ein älteres Gateway lässt sie weg.
 """
 
 from __future__ import annotations
@@ -21,6 +22,11 @@ from typing import Any
 import httpx
 import structlog
 
+from sluice.capacity import (
+    StreamTelemetry,
+    rate_limit_from_dict,
+    usage_from_dict,
+)
 from sluice.providers import (
     PROVIDER_TIMEOUT,
     ProviderConfigError,
@@ -95,14 +101,30 @@ class RemoteGatewayAdapter:
                 provider=data.get("provider", self.name),
                 tool_calls=tool_calls,
                 stop_reason=data.get("stop_reason"),
+                # Rev. 16 (§7.6): additiv. Ein Gateway ohne Rev.-16-Kenntnis sendet die
+                # Felder nicht — dann bleibt der Stand unbekannt (None), und der Kern
+                # verbucht den Aufruf trotzdem als Aufruf.
+                usage=usage_from_dict(data.get("usage")),
+                rate_limit=rate_limit_from_dict(data.get("rate_limit")),
             )
         finally:
             if self._client is None:
                 await client.aclose()
 
     async def stream(
-        self, messages: list[dict[str, Any]], *, model: str, max_tokens: int = 1024
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+        max_tokens: int = 1024,
+        telemetry: StreamTelemetry | None = None,
     ) -> AsyncIterator[str]:
+        """Deltas vom Gateway; das **terminale** Event füllt `telemetry` (Rev. 16, §7.6).
+
+        Das Gateway sendet vor `[DONE]` ein Event ohne `delta`, das Verbrauch und
+        Kopfstand trägt. Ein Event ohne `delta` wurde schon vor Rev. 16 stillschweigend
+        übergangen — deshalb ist der Vertrag in beide Richtungen verträglich.
+        """
         client = self._client or httpx.AsyncClient(timeout=PROVIDER_TIMEOUT)
         try:
             async with client.stream(
@@ -125,9 +147,16 @@ class RemoteGatewayAdapter:
                     payload = line[5:].strip()
                     if payload == "[DONE]":
                         break
-                    delta = json.loads(payload).get("delta", "")
+                    event = json.loads(payload)
+                    delta = event.get("delta", "")
                     if delta:
                         yield delta
+                        continue
+                    if telemetry is not None:
+                        if event.get("usage"):
+                            telemetry.usage = usage_from_dict(event["usage"])
+                        if event.get("rate_limit"):
+                            telemetry.rate_limit = rate_limit_from_dict(event["rate_limit"])
         finally:
             if self._client is None:
                 await client.aclose()

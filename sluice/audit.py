@@ -57,6 +57,12 @@ class EgressLogEntry:
     after: str | None
     provider_target: str | None
     verifier_findings: tuple[str, ...] = field(default_factory=tuple)
+    # Rev. 16 (§4.5/§6): WARUM dieses Ziel? Nur gesetzt, wenn **Sluice** es gewählt hat
+    # (Rotation, `model: "auto"`). Sobald die Wahl nicht mehr allein aus dem Profil
+    # ableitbar ist, muss die Begründung im Eintrag stehen — sonst sagt das Log, wohin
+    # etwas ging, aber nicht mehr, warum dorthin, und der Eintrag ist keine
+    # vollständige Auskunft mehr. None = der Konsument hat das Ziel selbst benannt.
+    provider_selection: str | None = None
 
 
 class AuditLog:
@@ -83,6 +89,7 @@ class AuditLog:
         after: str | None,
         provider_target: str | None = None,
         verifier_findings: tuple[str, ...] = (),
+        provider_selection: str | None = None,
     ) -> EgressLogEntry | None:
         """Schreibt einen Eintrag gemäß Betreiber-Level. `off` → kein Eintrag (None);
         `metadata` → ohne `before`/`after`; `full` → mit reviewbarem Vorher/Nachher."""
@@ -101,6 +108,7 @@ class AuditLog:
             after=after if keep_payload else None,
             provider_target=provider_target,
             verifier_findings=verifier_findings,
+            provider_selection=provider_selection,
         )
         self._entries.append(entry)
         log.info(
@@ -111,6 +119,7 @@ class AuditLog:
             released=released,
             reason=reason,
             provider_target=provider_target,
+            provider_selection=provider_selection,
             findings=list(verifier_findings),
         )
         return entry

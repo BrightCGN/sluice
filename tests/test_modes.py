@@ -247,3 +247,31 @@ def test_registrierung_ueberschreibt_einen_gleichnamigen_builtin() -> None:
             modes_module._MODE_FACTORIES["strict"] = original
         modes_module._instances.clear()
         modes_module._instances.update(saved_instances)
+
+
+def test_the_instance_cache_distinguishes_profiles_of_the_same_name_by_content():
+    """Der Cache-Schlüssel ist Name + Anonymisierungs-Identität (§5.4), nicht Name + Modus.
+
+    Der Fall, um den es geht: ein Profil wird **nachgeschärft** (hier: ein
+    Wörterbuch-Term kommt dazu) und die Profile werden neu geladen. Mit einem
+    Schlüssel aus `name:mode` sähen beide Fassungen gleich aus, und der Dienst
+    liefe mit der alten, laxeren Instanz weiter — eine Verschärfung, die niemand
+    bemerkt, weil nichts fehlschlägt.
+    """
+    from sluice.modes import select_mode
+
+    lax = Profile(name="crate", mode="strict", detector_profile="media")
+    strict = Profile(
+        name="crate", mode="strict", detector_profile="media", dictionary_terms=("Mustermann",)
+    )
+    assert select_mode(lax) is not select_mode(strict)
+    # Gleicher Inhalt bleibt derselbe Eintrag — sonst verlöre pseudonymizing sein
+    # Mapping zwischen zwei Requests (§8).
+    assert select_mode(strict) is select_mode(
+        Profile(
+            name="crate",
+            mode="strict",
+            detector_profile="media",
+            dictionary_terms=("Mustermann",),
+        )
+    )

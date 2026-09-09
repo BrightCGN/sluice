@@ -1,6 +1,43 @@
 # Sluice — Boundary- & Contract-Spec (v1)
 
-> **Stand:** 2026-09-03. **Revision 15: die geprüfte Fläche** — drei zusammengehörige
+> **Stand:** 2026-09-09. **Revision 16: bewusst wechselnde KIs — und die Zahlen, die
+> das tragen.** Zwei Teile, die zusammengehören.
+> **(a) §4.5 (neu) — Modell-Rotation innerhalb der Profil-Allowlist.** Ein Profil darf
+> eine **Rotationsmenge** austauschbarer Modelle deklarieren; ein Request bittet mit
+> `model: "auto"` darum, dass Sluice eines davon wählt. Der Anlass ist real und
+> vorhanden: **Crate rotiert das heute selbst** (`[[sluice.rotation]]`,
+> `orchestrator/curation.py::select_rotation`) — nicht für Kosten oder Ausfallsicherheit,
+> sondern für **Geschmacksvielfalt**, weil seine Kuratierung zustandslos ist. Dieselbe
+> Logik in jedem Projekt neu zu bauen ist genau die Fragmentierung, die Sluice beendet
+> (§1), und die Auswahlmenge ist ohnehin Sluice-Sache, weil sie die Provider-Allowlist
+> (§4.1) nicht verlassen darf. **Drei Regeln machen es sicher:** die Rotationsmenge ist
+> per **Ladeprüfung** eine Teilmenge der Allowlist (sie kann konstruktionsbedingt nicht
+> ausbrechen); ein **konkret genanntes Modell wird nie ersetzt** (zwei Opt-ins: Profil
+> *und* Request); und **wer wählt, verantwortet das Token-Budget** (`min_output_tokens`
+> je Eintrag hebt `max_tokens` an, senkt es nie — sonst antwortet ein Reasoning-Modell
+> **leer** statt abgeschnitten). Die Auswahl ist **zustandslos** (`policy = "random"`):
+> kein Zeiger, der einen Neustart nicht überlebt, keine Instanz-Drift, keine Kopplung an
+> einen Scope. **Kein stilles Ausweichen:** eine Wahl, ein Aufruf; scheitert der gewählte
+> Provider, ist das ein Fehler mit Namen — Failover/Health/Retry bleiben draußen (§10).
+> **(b) §7.6 (neu) — Kapazitäts-Telemetrie.** `usage` und der Rate-Limit-Kopfstand laufen
+> additiv durch `ProviderResponse`, den Gateway-Vertrag `/v1/complete` (§7.4, im Stream
+> als **terminales** SSE-Event) und bis in die Antwort des §7.2-Endpoints; `GET
+> /v1/capacity` liest den Stand. Bis Rev. 15 wurde beides weggeworfen — die eine Stelle,
+> an der alle Egress-Aufrufe vorbeikommen, war damit die einzige, die nichts über die
+> Auslastung sagen konnte. **Unbekannt ist `None`, nie `0`** (ein Provider ohne
+> Rate-Limit-Header ist nicht „leer"), der Stand ist **pro Instanz und best-effort**, und
+> er ändert **nie** eine Egress-Entscheidung im Sinne von §2 — er steuert höchstens die
+> Auswahl *innerhalb* der Allowlist (`policy = "headroom"`).
+> **Auch korrigiert:** der Instanz-Cache in `select_mode` (§3) schlüsselte auf
+> `name:mode`. Zwei verschieden konfigurierte Profile *gleichen Namens* sahen damit gleich
+> aus — wer ein Profil nachschärft (z. B. `dictionary_terms` ergänzt) und neu lädt, bekam
+> weiter die alte, laxere Instanz. Der Schlüssel ist jetzt die **Anonymisierungs-Identität**
+> (§5.4) plus Mapping-Lebenszyklus (§8): genau die Werte, die das Ergebnis verändern.
+> **Additiv/rückwärtskompatibel:** ohne Rotationsblock und ohne `model: "auto"` ist das
+> Verhalten unverändert; ein Gateway ohne Rev.-16-Kenntnis lässt die Telemetriefelder
+> schlicht weg.
+>
+> **Revision 15: die geprüfte Fläche** — drei zusammengehörige
 > Korrekturen an *einer* Frage: welchen Text sieht der Verifier überhaupt?
 > **(a) §5.5 (neu) — jede Content-Fläche wird geprüft, nicht nur `content:str`.** Block-Listen,
 > Tool-Result-Inhalte und Tool-Argumente liefen bis hierher **unredigiert und unverifiziert**
@@ -433,6 +470,15 @@ allowed_purposes    = ["playlist_curation"]
 provider_allowlist  = ["claude", "gemini", "openai"]
 detector_profile    = ["media", "pii_de"]     # Vereinigungsmenge: NAS-Pfade UND deutsche PII (§5.1, Rev. 13)
 dictionary_terms    = ["Mustermann", "Musterstraße 12"]  # Namen/Adressen, die Regex nicht fängt (§5.1, Rev. 10)
+  [profile."crate".rotation]                  # Rotationsmenge (§4.5, Rev. 16) — optional
+  policy            = "random"                # random (zustandslos, Default) | headroom (§7.6)
+  [[profile."crate".rotation.models]]
+  provider          = "claude"                # MUSS in provider_allowlist stehen (Ladeprüfung)
+  model             = "claude-opus-5"
+  min_output_tokens = 16000                   # Reasoning-Modell: Budget je EINTRAG (§4.5)
+  [[profile."crate".rotation.models]]
+  provider          = "gemini"
+  model             = "gemini-2.5-pro"
 
 [profile."bank-tool"]                         # strengstes Profil (§4.4)
 mode                = "strict"                 # kein consumer-generalisierter Text: harter Modus
@@ -487,6 +533,86 @@ Request treffen kann. (Verifizierende Modi bleiben per Request frei wählbar, §
 ### 4.4 Mandanten-Isolation
 Geteilter Code, aber getrennte Policies, Audit-Streams, Credentials und Budgets **pro Profil**.
 Ein Bug/eine schlampige Regel in `crate` darf niemals `temper`- oder `bank-tool`-Daten mitreißen.
+
+### 4.5 Modell-Rotation (`rotation`, optional, Rev. 16)
+
+Ein Profil darf eine **Rotationsmenge** deklarieren: Modelle, die sein Konsument als
+austauschbar ansieht. Bittet ein Request mit `model: "auto"` darum (§7.2), wählt Sluice
+eines davon aus.
+
+**Warum das hierher gehört und nicht in jeden Konsumenten.** Crate rotiert das heute
+selbst (`[[sluice.rotation]]`) — nicht für Kosten oder Ausfallsicherheit, sondern für
+**Geschmacksvielfalt**: die Kuratierung ist zustandslos, also darf jeder Lauf ein anderes
+Modell fragen, und über viele Läufe wird die Vorauswahl breiter. Dieselbe Logik in jedem
+Projekt neu und leicht anders zu bauen ist genau die Fragmentierung, die Sluice beendet
+(§1). Und die Auswahlmenge ist ohnehin schon Sluice-Sache: sie darf die Provider-Allowlist
+(§4.1) nicht verlassen.
+
+**Mechanismus vs. Domäne (§1.1).** Sluice *führt die Auswahl aus*; **welche** Modelle
+austauschbar sind, ist Domänenwissen und wird deshalb im Profil **deklariert** — dasselbe
+Muster wie die Detektor-Muster (§5.1) und die Provider-Allowlist. Sluice erfindet keine
+Äquivalenzen.
+
+**Zwei Opt-ins, beide ausdrücklich.**
+
+1. Das **Profil** deklariert `[profile.<name>.rotation]`. Ohne diesen Block gibt es keine
+   Rotation, und `model: "auto"` wird fail-closed abgewiesen (⇒ 403).
+2. Der **Request** fragt sie mit `model: "auto"` an. Ein konkret genanntes Modell wird
+   **nie** stillschweigend ersetzt: wer `claude-opus-5` verlangt, bekommt genau das oder
+   eine Absage. Ein Chokepoint, der das Ziel unbemerkt austauscht, verletzt dieselbe Regel
+   wie einer, der Tools verschluckt (§7.2).
+
+**Die Menge *ist* die Allowlist.** Jeder Eintrag muss in `provider_allowlist` stehen; das
+prüft der **Profil-Loader**, nicht erst der Egress-Pfad — ein Eintrag außerhalb ist ein
+Startfehler (wie ein unbekanntes `detector_profile` seit Rev. 13). Damit kann die Rotation
+konstruktionsbedingt nicht ausbrechen; der Guard prüft die Allowlist danach trotzdem noch
+einmal (§4.1). Ebenfalls Ladefehler: ein deklarierter Block **ohne** Modelle (die stillste
+Form von „aus"), ein Eintrag ohne `provider`/`model`, ein doppelter Eintrag (das wäre unter
+`random` eine unsichtbare Gewichtung — Gewichte gibt es bewusst nicht) und eine unbekannte
+`policy`.
+
+**Auswahl-Politiken.**
+
+- **`random` (Default) — zustandslos.** Kein Zeiger, der einen Neustart nicht überlebt,
+  keine Drift zwischen mehreren Kern-Instanzen, keine Kopplung an einen Scope (§8). Über
+  viele Läufe verteilt sie gleich; in einer kleinen Stichprobe darf dasselbe Modell
+  zweimal hintereinander drankommen. Das ist der bewusst gezahlte Preis dafür, dass
+  niemand einen Rotationsstand pflegen muss.
+- **`headroom`** — bevorzugt den Provider mit dem größten gemeldeten Restkontingent
+  (§7.6). Ein Kandidat **ohne** Telemetrie nimmt am Vergleich nicht teil, statt als „voll"
+  durchzugehen — sonst gewänne dauerhaft der Provider, über den man am wenigsten weiß.
+  Liegt über keinen etwas vor, entscheidet der Zufall; bei Gleichstand ebenfalls. Das ist
+  **keine** Lockerung einer Sicherheitszusage (die Allowlist gilt unverändert), sondern
+  nur eine gleichförmigere Verteilung.
+
+**Wer wählt, verantwortet das Token-Budget.** `min_output_tokens` steht **je Eintrag**, weil
+es am Modell hängt: ein Reasoning-Modell verbraucht das Budget zuerst mit internem
+Nachdenken. Ist es zu knapp, kommt eine **leere** Antwort zurück — nicht etwa eine
+abgeschnittene, und damit kein Fehler, den ein Konsument als solchen erkennt (in Crate
+beobachtet). Nach der Wahl **hebt** Sluice das `max_tokens` des Requests auf diese
+Untergrenze an. **Senken darf es nie**: der Konsument weiß, wie lang seine Antwort werden
+muss, Sluice nicht.
+
+**Ein eingegrenzter Provider.** Nennt der Request *zusätzlich* einen `provider`, engt das
+die Menge auf dessen Einträge ein („dieser Anbieter, welches seiner Modelle ist mir
+gleich"). Passt keiner, wird **abgewiesen** — nie auf einen anderen Anbieter ausgewichen.
+Auf einer Gateway-Instanz mit Provider-Lock (Rev. 5, §7.3) wirkt der Lock genauso.
+
+**Kein stilles Ausweichen.** Eine Auswahl, ein Aufruf. Scheitert der gewählte Provider, ist
+das ein Fehler mit Namen — kein Retry auf einem anderen. Sonst verstecke man genau die
+Information, die die Rotation sammeln soll: welches Modell unzuverlässig ist. Failover,
+Health-Probing und Retry-Orchestrierung bleiben ausdrücklich draußen (§10).
+
+**Das Audit hält die Begründung fest** (§6). Sobald Sluice das Ziel wählt, ist es nicht
+mehr allein aus dem Profil ableitbar; `provider_selection` trägt deshalb die Begründung
+(`policy=random (zustandslos): gemini/gemini-2.5-pro aus 3 Kandidaten`). Ist das Feld
+leer, hat der Konsument das Ziel selbst benannt — auch das ist eine Auskunft.
+
+**Was der Konsument im Gegenzug bekommt:** das `model`-Feld der Antwort trägt das
+**tatsächlich** benutzte Modell aus der Provider-Antwort, nie das angefragte (§7.2).
+Sobald Sluice rotiert, ist das die einzige Auskunft darüber, wer geantwortet hat — ein
+Konsument, der Bewertungen je Modell führt (Crate: `playlists.provider`/`model`), hängt
+daran.
 
 ---
 
@@ -812,6 +938,17 @@ z. B. `passthrough`) wird nur durchgelassen, wenn das Profil ihn **ausdrücklich
 listet — eine leere Allowlist sperrt ihn, die Request-Wahl allein reicht nicht (§4.3). `provider` (optional): default ist der erste Eintrag der Provider-Allowlist; jede Wahl
 wird gegen sie geprüft (§4.1).
 
+**`model: "auto"` (Rev. 16, §4.5):** bittet Sluice, ein Modell aus der im Profil
+deklarierten Rotationsmenge zu wählen. Ohne Rotationsblock ⇒ 403 (fail-closed, kein
+Default-Modell); ein zusätzlich genannter `provider` engt die Menge ein. Jeder **andere**
+`model`-Wert wird unverändert benutzt — Sluice ersetzt ein genanntes Modell nie. Nach der
+Wahl hebt Sluice `max_tokens` auf die `min_output_tokens` des Eintrags an (nie senken).
+
+**Antwort-Felder (Rev. 16):** `model` trägt das **tatsächlich benutzte** Modell aus der
+Provider-Antwort (nicht das angefragte, und nie `"auto"`); `usage`
+(`{input_tokens, output_tokens, total_tokens}`) kommt additiv dazu, sofern der Provider
+den Verbrauch meldet (§7.6). Fehlt die Messung, fehlt das Feld — es steht nie auf Null.
+
 Sluice-intern:  forward(scope) → verify → Provider-Adapter (§7.3) → stream_reverser(scope) → Tool-Args reverse
 → SSE zurück an den Konsumenten in **echten Werten**.
 ```
@@ -1007,6 +1144,54 @@ Der Sluice-**Kern** braucht weder `gliner` noch `torch` — er spricht den Diens
 hält den Chokepoint selbst frei von Modell-Abhängigkeiten (Extras: `ner`, `ner-onnx`,
 `ner-onnx-gpu`).
 
+### 7.6 Kapazitäts-Telemetrie (Revision 16)
+
+Was ein Provider über seinen eigenen Kopfstand meldet — Token-Verbrauch und
+Rate-Limit-Stand — lief bis Rev. 15 ins Leere: `ProviderResponse` trug nur
+text/model/provider, der Gateway-Vertrag gab nichts darüber zurück. Damit war die *eine*
+Stelle, an der alle Egress-Aufrufe vorbeikommen, zugleich die einzige, die nicht sagen
+konnte, wie voll die Konten sind.
+
+**Der Weg durch die Schichten, überall additiv:**
+
+```
+Provider-Antwort  → Adapter liest `usage` (3 Dialekte) + Rate-Limit-Header (2 Schemata)
+                  → ProviderResponse.usage / .rate_limit
+Gateway (§7.4)    → POST /v1/complete antwortet zusätzlich {usage, rate_limit}
+                    streamend: ein TERMINALES SSE-Event vor `[DONE]`, das beides trägt
+                    (ein Event ohne `delta` — ältere Kerne überlesen es)
+Kern              → Dispatch verbucht (provider, model) im Kapazitätsstand
+Konsument (§7.2)  → `usage` im Antwort-Body
+Betreiber         → GET /v1/capacity
+```
+
+**Drei Regeln.**
+
+1. **Unbekannt ist `None`, nie `0`.** Ein Provider ohne Rate-Limit-Header (Gemini meldet
+   keine) ist etwas anderes als einer mit aufgebrauchtem Kontingent. Ein nie gemessener
+   Wert darf im Snapshot nicht aussehen wie ein gemessener — sonst baute die Auswahl
+   (§4.5) auf einer Vermutung. Gemeldet wird ein Feld nur, wenn es wirklich gemessen wurde.
+2. **Pro Instanz, in-memory, best-effort.** Der Stand beginnt bei jedem Neustart von vorn,
+   und mehrere Kern-Instanzen sehen jeweils nur ihre eigenen Aufrufe. Das steht auch in der
+   Antwort (`scope: "instance"`, `best_effort: true`), damit niemand die Zahlen für eine
+   Abrechnung hält. Geteilter Zustand mit eigener Konsistenz-Maschinerie brächte keinen
+   Gewinn, der den Riegel besser macht.
+3. **Telemetrie ändert nie eine Egress-Entscheidung im Sinne von §2.** Gate, Modus,
+   Verifier und Audit laufen davon unberührt; sie steuert höchstens die Auswahl *innerhalb*
+   der Allowlist (§4.5, `policy = "headroom"`). Fällt sie aus, wird nichts durchlässiger,
+   nur die Verteilung gleichförmiger.
+
+**Headroom** ist der relative Restanteil in `[0,1]` und das **Minimum** über alle bekannten
+Achsen: wer noch 90 % seiner Tokens, aber 2 % seiner Requests hat, ist bei 2 % — das
+knappste Kontingent bindet. Ist keine Achse messbar, ist der Headroom unbekannt.
+
+**Nicht im Audit.** Token-Zahlen sind Metadaten und stehen im strukturierten Log und unter
+`/v1/capacity`, nicht im `egress_log`-Eintrag (§6): der wird **vor** dem Provider-Aufruf
+geschrieben und trägt die Freigabe-Entscheidung, nicht deren Kosten.
+
+**Abrechnung, Budget-Durchsetzung, Kosten-Limits sind nicht Teil davon** — das wäre eine
+zweite Policy-Achse neben dem Profil-Gate und gehört, wenn überhaupt, in eine eigene Runde.
+
 ---
 
 ## 8. Mapping-Lebenszyklus (nur pseudonymizing-Modus)
@@ -1086,6 +1271,14 @@ ihnen operieren.
   `Mode`-Interface (§3) ein **öffentlicher Vertrag** und fällt unter die Versionszusage §7.4.
   Registrierungs-Mechanik (Entry-Points vs. explizite Registry) — *(offen)*.
 - **Lizenzwahl** für den Open-Source-Kern — *(offen)*.
+- **Failover, Health-Probing, Retry-Orchestrierung** — *(post-v1/extern)*. Die Rotation
+  (§4.5) ist ausdrücklich **keine** Vorstufe davon: sie wählt **einmal vor** dem Aufruf
+  und weicht bei einem Fehlschlag **nicht** aus. Distributed-Systems-Maschinerie gehört
+  nicht in den Riegel — und ein stiller Ausweich-Versuch verstecke genau die Information,
+  die man über die Zuverlässigkeit eines Modells sammeln will.
+- **Kosten-/Budget-Durchsetzung** auf Basis der Kapazitäts-Telemetrie (§7.6) — *(offen)*.
+  Heute ist die Telemetrie rein lesend; ein Budget-Riegel wäre eine zweite Policy-Achse
+  neben dem Profil-Gate und braucht eine eigene Runde.
 
 ---
 
@@ -1096,6 +1289,6 @@ ihnen operieren.
 | **Sluice** | *ist* die Boundary | — | — |
 | **PrismClaw** | Konsument (verliert eingebackene `anon`; Gateway-Rolle entfällt mit Revision 2, §7.3) | — / pseudonymizing | Proxy (§7.2) |
 | **Temper** | Konsument | generalizing | Guard-Call (§7.1) |
-| **Crate** | künftiger Konsument | generalizing | Guard-Call (§7.1) |
+| **Crate** | Konsument; **Anlass für die Rotation (§4.5, Rev. 16)** — rotiert heute noch selbst | strict | Proxy (§7.2) |
 | **Aider/Code** | Konsument | **pseudonymizing** (Opt-in) | Proxy (§7.2) |
 | **Bank-Tool** | künftiger Konsument | generalizing (financial) | Guard-Call (§7.1) |

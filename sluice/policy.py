@@ -10,6 +10,11 @@ Feld `strategy` bleibt Parse-Alias und Lese-Property. Fehlt `mode`, gilt der **s
 Default `strict`** (§4.3), nie `passthrough`. `allowed_modes` (§4.1) begrenzt optional,
 welche Modi ein Request wählen darf (Default: alle erlaubt).
 
+Rev. 16: `[profile.<name>.rotation]` deklariert optional eine **Rotationsmenge** (§4.5) —
+austauschbare Modelle, aus denen Sluice auf `model: "auto"` hin eines wählt. Die Menge
+wird beim Laden gegen `provider_allowlist` geprüft; ein Eintrag außerhalb ist ein
+Startfehler, nicht erst eine Laufzeit-Blockade.
+
 Herkunft: Tempers egress/policy.py, erweitert um das maschinenlesbare
 TOML-Profil-Schema aus Spec §4.
 """
@@ -29,6 +34,12 @@ from sluice.ner import (
     DEFAULT_THRESHOLD,
     DEFAULT_TIMEOUT_SECONDS,
     NerConfig,
+)
+from sluice.rotation import (
+    DEFAULT_POLICY,
+    VALID_POLICIES,
+    RotationConfig,
+    RotationEntry,
 )
 
 if TYPE_CHECKING:
@@ -61,6 +72,10 @@ class Profile:
     dictionary_terms: tuple[str, ...] = ()  # konsument-deklarierte Literale (§5.1, Rev. 10)
     reversible: ReversibleConfig | None = None
     ner: NerConfig | None = None  # NER-Stufe + Anonymisierungs-Identität (§5.3/§5.4, Rev. 12)
+    # Rotationsmenge (§4.5, Rev. 16). Leer = keine Rotation; `model: "auto"` ⇒ 403.
+    # Jeder Eintrag steht per Ladeprüfung in `provider_allowlist` — die Auswahlmenge
+    # kann die Allowlist konstruktionsbedingt nicht verlassen (§4.1).
+    rotation: RotationConfig = RotationConfig()
 
     @property
     def strategy(self) -> str:
@@ -190,19 +205,119 @@ def parse_profiles(toml_text: str) -> dict[str, Profile]:
                 storage=storage,
             )
 
+        provider_allowlist = tuple(raw.get("provider_allowlist", ()))
         profiles[name] = Profile(
             name=name,
             mode=mode,
             egress_enabled=bool(raw.get("egress_enabled", True)),
             allowed_purposes=tuple(raw.get("allowed_purposes", ())),
-            provider_allowlist=tuple(raw.get("provider_allowlist", ())),
+            provider_allowlist=provider_allowlist,
             allowed_modes=allowed_modes,
             detector_profile=_parse_detector_profile(name, raw),
             dictionary_terms=tuple(str(t) for t in raw.get("dictionary_terms", ())),
             reversible=reversible,
             ner=_parse_ner(name, raw),
+            rotation=_parse_rotation(name, raw, provider_allowlist),
         )
     return profiles
+
+
+def _parse_rotation(
+    profile_name: str, raw: dict, provider_allowlist: tuple[str, ...]
+) -> RotationConfig:
+    """Parst `[profile.<name>.rotation]` (§4.5, Rev. 16).
+
+    ```toml
+      [profile."crate".rotation]
+      policy = "random"                       # random | headroom
+
+      [[profile."crate".rotation.models]]
+      provider          = "anthropic"
+      model             = "claude-opus-5"
+      min_output_tokens = 16000
+    ```
+
+    Alles wird **beim Laden** geprüft, nicht erst im Egress-Pfad — eine Rotationsmenge
+    ist Betreiber-Konfiguration, und ein Zeichendreher darin soll den Dienst nicht
+    starten lassen (dieselbe Haltung wie bei `detector_profile`, Rev. 13).
+
+    Die schärfste Prüfung ist die gegen die **Provider-Allowlist**: die Auswahlmenge
+    *ist* die Allowlist (§4.1) und kann sie damit konstruktionsbedingt nicht verlassen.
+    Ohne diese Prüfung wäre die Rotation ein zweiter Weg, ein Ziel zu benennen — und
+    ein zweiter Weg an einer Boundary ist ein Weg zu viel (§1).
+
+    Ohne Block: leere Rotation. `model: "auto"` wird dann fail-closed abgewiesen (§7.2).
+    """
+    block = raw.get("rotation")
+    if block is None:
+        return RotationConfig()
+    if not isinstance(block, dict):
+        raise ValueError(
+            f"Profil '{profile_name}': rotation muss eine Tabelle sein, ist "
+            f"{type(block).__name__} (§4.5)."
+        )
+
+    policy = str(block.get("policy", DEFAULT_POLICY))
+    if policy not in VALID_POLICIES:
+        raise ValueError(
+            f"Profil '{profile_name}': unbekannte rotation.policy '{policy}' "
+            f"(erlaubt: {', '.join(VALID_POLICIES)}, §4.5)."
+        )
+
+    declared = block.get("models")
+    if not isinstance(declared, list) or not declared:
+        # Ein deklarierter, aber leerer Block wäre die stillste Form von „aus": das
+        # Profil sagt „ich rotiere", und nichts passiert. Lieber ein Startfehler.
+        raise ValueError(
+            f"Profil '{profile_name}': rotation.models fehlt oder ist leer — ein "
+            f"deklarierter Rotationsblock ohne Modelle rotiert nichts (§4.5)."
+        )
+
+    entries: list[RotationEntry] = []
+    seen: set[tuple[str, str]] = set()
+    for index, item in enumerate(declared):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"Profil '{profile_name}': rotation.models[{index}] muss eine Tabelle sein."
+            )
+        provider = str(item.get("provider", "")).strip()
+        model = str(item.get("model", "")).strip()
+        if not provider or not model:
+            # Crate lässt Einträge ohne Modell still fallen; hier wäre das ein Modell,
+            # das der Betreiber eingetragen hat und das nie drankommt, ohne dass es
+            # jemand merkt.
+            raise ValueError(
+                f"Profil '{profile_name}': rotation.models[{index}] braucht provider "
+                f"UND model (§4.5)."
+            )
+        if provider not in provider_allowlist:
+            raise ValueError(
+                f"Profil '{profile_name}': rotation.models[{index}] nennt Provider "
+                f"'{provider}', der nicht in provider_allowlist steht (§4.1/§4.5). "
+                f"Die Rotationsmenge ist eine Teilmenge der Allowlist — wer sie "
+                f"erweitert, trägt den Provider dort zuerst ein."
+            )
+        key = (provider, model)
+        if key in seen:
+            # Ein doppelter Eintrag wäre unter `random` eine unsichtbare Gewichtung.
+            # Gewichte sind nicht Teil von Rev. 16; still zu gewichten ist schlechter,
+            # als es nicht zu können.
+            raise ValueError(
+                f"Profil '{profile_name}': rotation.models nennt '{provider}/{model}' "
+                f"doppelt — Gewichtung über Duplikate gibt es bewusst nicht (§4.5)."
+            )
+        seen.add(key)
+        floor = int(item.get("min_output_tokens", 0))
+        if floor < 0:
+            raise ValueError(
+                f"Profil '{profile_name}': rotation.models[{index}].min_output_tokens "
+                f"muss >= 0 sein, ist {floor}."
+            )
+        entries.append(
+            RotationEntry(provider=provider, model=model, min_output_tokens=floor)
+        )
+
+    return RotationConfig(policy=policy, entries=tuple(entries))
 
 
 def _parse_detector_profile(profile_name: str, raw: dict) -> str:

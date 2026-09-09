@@ -58,14 +58,18 @@ Sluice undicht oder nicht wiederverwendbar. **Nicht selbst raten — gegen die S
   validierten Fix die übertragbare Lektion machen — das ist Temper-Businesslogik, nicht Sluice),
   die konkreten Detektor-**Muster** (als Profil deklariert, seit Rev. 13 auch als
   **Liste** — `detector_profile = ["media", "pii_de"]` legt die Sets zur
-  Vereinigungsmenge zusammen), die Provider-Allowlist.
+  Vereinigungsmenge zusammen), die Provider-Allowlist, und seit Rev. 16 die
+  **Äquivalenz-Deklaration** der Rotation (`[profile.<name>.rotation]`, §4.5): *welche*
+  Modelle austauschbar sind, weiß nur der Konsument — Sluice führt die Auswahl nur aus.
 - **Seit Revision 2 in Sluice:** Provider-Adapter (anthropic/openai/gemini/mistral, §7.3)
   inkl. API-Keys per Env — Adapter werden **nur nach `released=true`** aufgerufen, nie davor.
   **Seit Revision 7 verbindlich:** der Kern ruft Provider **nie direkt** — nur über die
   eigenständigen Gateway-Services (`SLUICE_GATEWAY_<PROVIDER>_URL` Pflicht, fehlende URL ⇒
   fail-closed); Provider-Keys liegen ausschließlich bei den Gateways. Jedes Gateway läuft
   unter seinem eigenen System-User `sluice-gw-<provider>` (Rev. 8, User-Isolation).
-- **Nicht in Sluice (post-v1 offen):** Failover/Health/Tenant-Order-Routing.
+- **Nicht in Sluice (post-v1 offen):** Failover/Health/Tenant-Order-Routing. Die
+  Modell-Rotation (Rev. 16) ist ausdrücklich **keine** Vorstufe davon — sie wählt einmal
+  *vor* dem Aufruf und weicht bei einem Fehlschlag nie aus (siehe Leitplanken).
 
 Wenn Domänenlogik „mal eben" nach Sluice greifen will: **das ist das Signal zu stoppen**, nicht
 weiterzumachen.
@@ -118,6 +122,8 @@ sluice/
   policy.py              # Profil-Schema + check_egress_allowed
   verifier.py            # deterministischer Riegel; Muster aus Detektor-Profilen
   audit.py               # egress_log, append-only
+  capacity.py            # Kapazitäts-Telemetrie: usage + Rate-Limit-Kopfstand (Rev. 16, §7.6)
+  rotation.py            # Rotationsmenge + Auswahl (Rev. 16, §4.5); zustandslos
   content.py             # Content-Flächen einer Message: aufzählen + ersetzen (Rev. 15, §5.5)
   dialect.py             # neutral ↔ OpenAI-Tool-Dialekt; die EINZIGE Stelle mit Dialekt (Rev. 15)
   spans.py               # Span-Mechanik: Offsets, Vereinigung, Redaktion (Rev. 12, §5.3)
@@ -181,7 +187,8 @@ tests/                   # kein Netz; httpx.MockTransport wo HTTP nötig
 - Kein Netz in Tests; wo HTTP nötig, `httpx.MockTransport`.
 - Pflicht-Fälle: Verifier gleich streng in beiden Modi · Default-Deny (kein Profil → nichts raus)
   · souveränes Profil (`egress_enabled=false` → nichts raus) · Streaming-Holdback (Pseudonym über
-  zwei Chunks) · Tool-Arg-Reversal · Scope-Isolation · TTL-Ablauf.
+  zwei Chunks) · Tool-Arg-Reversal · Scope-Isolation · TTL-Ablauf · **genanntes Modell wird nie
+  ersetzt** · Rotationseintrag außerhalb der Allowlist ist ein Ladefehler.
 
 ---
 
@@ -220,6 +227,19 @@ tests/                   # kein Netz; httpx.MockTransport wo HTTP nötig
   `generalizing`/`pseudonymizing`), nie lockern** — auch nicht „weil reversibel". Ob ein Modus ihn überhaupt komponiert, ist Modus-
   Entscheidung (`passthrough` tut es nicht); der *Auslieferungs-Default bleibt `strict`* mit
   Verifier fail-closed (Rev. 9, §4.3/§5).
+- **Rotation ist kein Failover (Rev. 16, §4.5).** Sluice darf ein Modell *wählen* — aus einer
+  im Profil deklarierten Menge, die per Ladeprüfung eine Teilmenge der `provider_allowlist`
+  ist, und nur wenn der Request ausdrücklich `model: "auto"` sagt. Ein **konkret genanntes
+  Modell wird nie ersetzt**. Danach gilt: **eine Wahl, ein Aufruf.** Kein Retry auf einem
+  anderen Provider, kein Health-Probing, keine Failover-Kette — das versteckt genau die
+  Information, die man sammeln will (welches Modell unzuverlässig ist), und
+  Distributed-Systems-Maschinerie gehört nicht in den Riegel. Wer wählt, verantwortet auch
+  das Token-Budget: `min_output_tokens` je Eintrag **hebt** `max_tokens` an, **senkt nie**.
+- **Telemetrie behauptet nichts Ungemessenes (Rev. 16, §7.6).** `usage`/`rate_limit` sind
+  `None`, wenn der Provider nichts meldet — **nie `0`**. Ein Provider ohne Rate-Limit-Header
+  darf nicht aussehen wie einer mit aufgebrauchtem Kontingent. Der Kapazitätsstand ist
+  ausdrücklich pro Instanz, in-memory, best-effort, und er ändert **nie** eine
+  Egress-Entscheidung — nur die Auswahl *innerhalb* der Allowlist.
 - **Versionierte Schnittstelle ab Tag 1** (`/v1/…`) — Sluice ist eine Abhängigkeit mit Vertrag;
   ein Breaking Change trifft sonst alle Konsumenten gleichzeitig.
 - **Grenze Mechanismus/Domäne (oben) nicht selbst raten** — gegen die Spec bauen, im Zweifel fragen.

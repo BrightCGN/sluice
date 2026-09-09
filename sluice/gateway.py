@@ -13,7 +13,9 @@ Es hält nur den API-Key seines eigenen Providers.
 Endpunkte (interner Vertrag Kern → Gateway, versioniert §7.4):
 - `GET  /v1/health`    — Liveness, meldet den bedienten Provider.
 - `POST /v1/complete`  — {messages, model, max_tokens[, stream]} →
-                         JSON {text, model, provider} bzw. SSE `data: {"delta": …}` + `[DONE]`.
+                         JSON {text, model, provider[, usage, rate_limit]} bzw.
+                         SSE `data: {"delta": …}` + terminales `data: {"usage": …,
+                         "rate_limit": …}` + `[DONE]` (Rev. 16, §7.6).
 
 Start (systemd-Template `deploy/sluice-gateway@.service`, Ports ab 17890):
     SLUICE_PROVIDER=anthropic uvicorn --factory sluice.gateway:app --port 17890
@@ -32,6 +34,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
+from sluice.capacity import StreamTelemetry
 from sluice.providers import (
     TOOL_CAPABLE_PROVIDERS,
     ProviderAdapter,
@@ -110,11 +113,26 @@ def create_gateway_app(
 
         try:
             if body.get("stream"):
-                chunks = adapter.stream(messages, model=model, max_tokens=max_tokens)
+                # Rev. 16 (§7.6): Der Verbrauch eines Streams steht erst am Ende fest.
+                # Er wird in die Senke geschrieben und als **terminales** SSE-Event vor
+                # `[DONE]` gesendet — ein Kern, der es nicht kennt, sieht ein Event ohne
+                # `delta` und überliest es (rückwärtskompatibel, §7.4).
+                telemetry = StreamTelemetry()
+                chunks = adapter.stream(
+                    messages, model=model, max_tokens=max_tokens, telemetry=telemetry
+                )
 
                 async def sse() -> Any:
                     async for delta in chunks:
                         yield f"data: {json.dumps({'delta': delta}, ensure_ascii=False)}\n\n"
+                    if telemetry.usage is not None or telemetry.rate_limit is not None:
+                        final = {
+                            "usage": telemetry.usage.as_dict() if telemetry.usage else None,
+                            "rate_limit": (
+                                telemetry.rate_limit.as_dict() if telemetry.rate_limit else None
+                            ),
+                        }
+                        yield f"data: {json.dumps(final, ensure_ascii=False)}\n\n"
                     yield "data: [DONE]\n\n"
 
                 return StreamingResponse(sse(), media_type="text/event-stream")
@@ -135,6 +153,13 @@ def create_gateway_app(
                     for c in response.tool_calls
                 ]
                 result["stop_reason"] = response.stop_reason
+            # Rev. 16 (§7.6): Kapazitäts-Telemetrie additiv. Nur bei tatsächlicher
+            # Messung ergänzen — ein Feld voller Nullen sähe aus wie ein gemessener
+            # Stand und wäre im Snapshot von einem echten nicht zu unterscheiden.
+            if response.usage is not None:
+                result["usage"] = response.usage.as_dict()
+            if response.rate_limit is not None:
+                result["rate_limit"] = response.rate_limit.as_dict()
             return JSONResponse(result)
         except ProviderConfigError as exc:
             return _error(500, "gateway_config", str(exc))

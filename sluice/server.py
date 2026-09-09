@@ -8,7 +8,13 @@ Endpunkte:
                                  der Konsument dispatcht selbst.
 - `POST /v1/chat/completions`  — Voll-Proxy (§7.2): Gate → Modus → Verifier →
                                  Audit → Provider-Adapter → (reverse), inkl. SSE-Streaming.
+- `GET  /v1/capacity`          — Kapazitätsstand dieser Instanz (§7.6, Rev. 16).
 - `GET  /v1/health`            — Liveness.
+
+Modell-Rotation (Rev. 16, §4.5): `model: "auto"` bittet Sluice, ein Modell aus der im
+Profil deklarierten Rotationsmenge zu wählen. **Zwei Opt-ins**, beide ausdrücklich —
+das Profil deklariert die Menge, der Request fragt sie mit `auto` an. Ein konkret
+genanntes Modell wird nie stillschweigend ersetzt.
 
 Modus (Rev. 9, safety first): Auslieferungs-Default ist **`strict`** (auto-redigierend,
 Verifier fail-closed). Jeder registrierte Modus-Name (§3) ist per Profil (`mode`) oder pro
@@ -47,6 +53,8 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from sluice.audit import AuditLog
+from sluice.capacity import CapacityStore
+from sluice.capacity import capacity_store as _default_capacity
 from sluice.content import messages_surfaces
 from sluice.dialect import (
     DialectError,
@@ -65,6 +73,13 @@ from sluice.providers import (
     ProviderError,
     canonical_provider,
     select_egress_adapter,
+)
+from sluice.rotation import (
+    AUTO_MODEL,
+    RotationChoice,
+    RotationError,
+    effective_max_tokens,
+    select_rotation,
 )
 from sluice.modes import EgressPayload, Scope, is_registered_mode
 
@@ -131,6 +146,8 @@ def create_app(
     adapter_factory: Callable[[str], ProviderAdapter] = select_egress_adapter,
     audit: AuditLog | None = None,
     provider_lock: str | None = None,
+    capacity: CapacityStore | None = None,
+    rng: Any = None,
 ) -> Starlette:
     """App-Factory. Profil-Quelle: Argument > `profiles_path` > Env `SLUICE_PROFILES` > leer.
 
@@ -138,6 +155,9 @@ def create_app(
     adapter_factory/audit sind Injektionspunkte für Tests (kein Netz, §Test-Disziplin).
     provider_lock (Fallback: Env `SLUICE_PROVIDER`) beschränkt die Instanz auf genau
     einen Provider — Betriebsvariante „ein Service pro Gateway" (Rev. 5, §7.3).
+    capacity/rng: Injektionspunkte für die Rotation und ihre Telemetrie (Rev. 16,
+    §4.5/§7.6) — `rng` macht die zustandslose Zufallswahl im Test reproduzierbar,
+    ohne dass der Betrieb dafür einen Zustand hielte.
     """
     if profiles is None:
         path = profiles_path or os.environ.get("SLUICE_PROFILES", "")
@@ -148,6 +168,7 @@ def create_app(
             log.warning("server.no_profiles", hint="SLUICE_PROFILES nicht gesetzt → Default-Deny")
 
     resolved: dict[str, Profile] = profiles
+    capacity_store = capacity if capacity is not None else _default_capacity
 
     lock_raw = provider_lock if provider_lock is not None else os.environ.get(
         "SLUICE_PROVIDER", ""
@@ -190,6 +211,26 @@ def create_app(
             )
         identity = profile.anonymization_identity()
         return JSONResponse({"profile": name, "digest": identity.digest(), **identity.as_dict()})
+
+    async def capacity_report(_: Request) -> JSONResponse:
+        """Kapazitätsstand **dieser Instanz** (§7.6, Rev. 16).
+
+        Ausdrücklich best-effort und in-memory: der Stand beginnt bei jedem Neustart
+        von vorn, und mehrere Kern-Instanzen sehen jeweils nur ihre eigenen Aufrufe.
+        Das steht auch in der Antwort (`scope: "instance"`), damit niemand die Zahlen
+        für eine Abrechnung hält — ein Wert, den niemand prüft, wäre keine Zusage,
+        sondern eine Vermutung.
+
+        Inhalt sind Metadaten (Token-Zahlen, Kopfstände), nie Nutzdaten — dieselbe
+        Klasse wie Audit-Level `metadata` (§6).
+        """
+        return JSONResponse(
+            {
+                "scope": "instance",
+                "best_effort": True,
+                "records": [r.as_dict() for r in capacity_store.snapshot()],
+            }
+        )
 
     async def egress_guard(request: Request) -> JSONResponse:
         """Guard-only (§7.1): Antwort immer 200, `released` trägt die Entscheidung."""
@@ -254,7 +295,46 @@ def create_app(
         purpose = body.get("purpose") or (
             effective.allowed_purposes[0] if effective and effective.allowed_purposes else ""
         )
-        provider_target = body.get("provider") or _default_provider(effective)
+        max_tokens = int(body.get("max_tokens", 1024))
+        selection: RotationChoice | None = None
+
+        if model == AUTO_MODEL:
+            # Rotation (Rev. 16, §4.5). Der Request fragt sie ausdrücklich an; ohne
+            # `auto` wählt Sluice NIE — ein genanntes Modell wird nie ersetzt.
+            if effective is None:
+                return _blocked(
+                    "Default-Deny: kein (bekanntes) Profil, also auch keine "
+                    "Rotationsmenge, aus der gewählt werden könnte (§4.3/§4.5)."
+                )
+            try:
+                selection = select_rotation(
+                    effective.rotation,
+                    # Ein im Request genannter Provider engt die Menge ein („dieser
+                    # Anbieter, welches Modell ist mir gleich"). Auf einer
+                    # Gateway-Instanz (Rev. 5) tut der Lock dasselbe — sonst wählte die
+                    # Rotation ein Ziel, das die Instanz gleich darauf mit 403 abweist.
+                    provider=body.get("provider") or lock,
+                    capacity=capacity_store,
+                    rng=rng,
+                )
+            except RotationError as exc:
+                return _blocked(str(exc))
+            provider_target = selection.provider
+            model = selection.model
+            # Wer das Modell wählt, verantwortet das Token-Budget (§4.5): anheben,
+            # nie senken. Ein Reasoning-Modell verbraucht das Budget zuerst mit
+            # Nachdenken; ist es zu knapp, kommt eine LEERE Antwort zurück — kein
+            # Fehler, den der Konsument als solchen erkennen würde.
+            max_tokens = effective_max_tokens(max_tokens, selection.entry)
+            log.info(
+                "server.rotation",
+                profile=effective.name,
+                provider=provider_target,
+                model=model,
+                reason=selection.reason,
+            )
+        else:
+            provider_target = body.get("provider") or _default_provider(effective)
 
         # Gateway-Instanz (Rev. 5): nur der eigene Provider, alles andere 403 fail-closed.
         if lock is not None and provider_target and canonical_provider(provider_target) != lock:
@@ -289,8 +369,12 @@ def create_app(
             "provider_target": provider_target,
             "model": model,
             "scope": scope,
-            "max_tokens": int(body.get("max_tokens", 1024)),
+            "max_tokens": max_tokens,
             "audit": audit,
+            # Rev. 16 (§4.5/§6): die Begründung geht ins Audit, sobald SLUICE das Ziel
+            # gewählt hat — sonst wäre es nicht mehr aus dem Profil ableitbar.
+            "provider_selection": selection.reason if selection else None,
+            "capacity": capacity_store,
         }
 
         try:
@@ -331,11 +415,20 @@ def create_app(
             rendered = render_tool_calls(outcome.tool_calls, dialect)
             if rendered:
                 message["tool_calls"] = rendered
+            payload_out: dict[str, Any] = {
+                "object": "chat.completion",
+                # §12.1 des Konsumenten-Vertrags: hier steht das TATSÄCHLICH benutzte
+                # Modell (aus der Provider-Antwort), nicht das angefragte. Sobald Sluice
+                # rotiert, ist das die einzige Auskunft darüber, wer geantwortet hat —
+                # ein Konsument, der Bewertungen je Modell führt, hängt daran.
+                "model": outcome.model,
+                "provider": outcome.provider,
+            }
+            if outcome.usage is not None:
+                payload_out["usage"] = outcome.usage.as_dict()
             return JSONResponse(
                 {
-                    "object": "chat.completion",
-                    "model": outcome.model,
-                    "provider": outcome.provider,
+                    **payload_out,
                     "choices": [
                         {
                             "index": 0,
@@ -359,6 +452,7 @@ def create_app(
             Route("/v1/health", health, methods=["GET"]),
             Route("/v1/egress/guard", egress_guard, methods=["POST"]),
             Route("/v1/anonymization-identity", anonymization_identity, methods=["GET"]),
+            Route("/v1/capacity", capacity_report, methods=["GET"]),
             Route("/v1/chat/completions", chat_completions, methods=["POST"]),
         ]
     )

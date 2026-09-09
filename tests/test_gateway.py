@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 import pytest
 
+from sluice.capacity import StreamTelemetry, Usage
 from sluice.gateway import create_gateway_app
 from sluice.providers import ProviderConfigError, ProviderResponse
 
@@ -18,6 +19,7 @@ class FakeAdapter:
     def __init__(self, *, reply: str = "ok", stream_chunks: tuple[str, ...] = ()) -> None:
         self.reply = reply
         self.stream_chunks = stream_chunks
+        self.stream_usage: Usage | None = None
         self.calls: list[list[dict[str, Any]]] = []
 
     async def complete(
@@ -27,9 +29,16 @@ class FakeAdapter:
         return ProviderResponse(text=self.reply, model=model, provider=self.name)
 
     async def stream(
-        self, messages: list[dict[str, Any]], *, model: str, max_tokens: int = 1024
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+        max_tokens: int = 1024,
+        telemetry: StreamTelemetry | None = None,
     ) -> AsyncIterator[str]:
         self.calls.append(messages)
+        if telemetry is not None:
+            telemetry.usage = self.stream_usage
         for chunk in self.stream_chunks:
             yield chunk
 

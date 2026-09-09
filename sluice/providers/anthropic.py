@@ -13,6 +13,12 @@ from typing import Any
 import httpx
 import structlog
 
+from sluice.capacity import (
+    StreamTelemetry,
+    Usage,
+    rate_limit_from_headers,
+    usage_from_payload,
+)
 from sluice.providers import (
     PROVIDER_TIMEOUT,
     ProviderError,
@@ -160,14 +166,30 @@ class AnthropicAdapter:
                 provider=self.name,
                 tool_calls=tool_calls,
                 stop_reason=data.get("stop_reason"),
+                # Rev. 16 (§7.6): Verbrauch aus dem Body, Kopfstand aus den Headern.
+                # Beides additiv — fehlt es, bleibt es None (unbekannt, nicht null).
+                usage=usage_from_payload(data),
+                rate_limit=rate_limit_from_headers(resp.headers, prefix="anthropic"),
             )
         finally:
             if self._client is None:
                 await client.aclose()
 
     async def stream(
-        self, messages: list[dict[str, Any]], *, model: str, max_tokens: int = 1024
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+        max_tokens: int = 1024,
+        telemetry: StreamTelemetry | None = None,
     ) -> AsyncIterator[str]:
+        """Text-Deltas; Kapazitätsdaten (Rev. 16, §7.6) landen in `telemetry`.
+
+        Anthropic verteilt den Verbrauch über zwei Events: `message_start` trägt die
+        Eingabe-Tokens, `message_delta` die bis dahin erzeugten Ausgabe-Tokens. Beide
+        werden zusammengeführt, damit die Senke am Ende einen vollständigen Wert hält
+        und nicht die Hälfte — eine halbe Messung sähe im Snapshot aus wie eine ganze.
+        """
         client = self._client or httpx.AsyncClient(timeout=PROVIDER_TIMEOUT)
         body = self._body(messages, model=model, max_tokens=max_tokens)
         body["stream"] = True
@@ -178,14 +200,30 @@ class AnthropicAdapter:
                 if resp.status_code != 200:
                     detail = (await resp.aread()).decode(errors="replace")[:500]
                     raise ProviderError(f"anthropic: HTTP {resp.status_code}: {detail}")
+                if telemetry is not None:
+                    telemetry.rate_limit = rate_limit_from_headers(
+                        resp.headers, prefix="anthropic"
+                    )
+                seen = Usage()
                 async for line in resp.aiter_lines():
                     if not line.startswith("data:"):
                         continue
                     event = json.loads(line[5:].strip())
-                    if event.get("type") == "content_block_delta":
+                    kind = event.get("type")
+                    if kind == "content_block_delta":
                         delta = event.get("delta", {})
                         if delta.get("type") == "text_delta":
                             yield delta.get("text", "")
+                    elif telemetry is not None and kind in ("message_start", "message_delta"):
+                        block = (event.get("message") or event).get("usage")
+                        if isinstance(block, dict):
+                            seen = Usage(
+                                input_tokens=int(block.get("input_tokens") or 0)
+                                or seen.input_tokens,
+                                output_tokens=int(block.get("output_tokens") or 0)
+                                or seen.output_tokens,
+                            )
+                            telemetry.usage = seen
         finally:
             if self._client is None:
                 await client.aclose()

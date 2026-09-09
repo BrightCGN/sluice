@@ -42,6 +42,7 @@ Maßgeblich ist `sluice/policy.py` (`Profile`, `parse_profiles`).
 | `dictionary_terms` | Liste | `[]` | Konsument-deklarierte Literale, die Regex nicht fängt (§5.1, Rev. 10). |
 | `[…​.reversible]` | Tabelle | — | Mapping-Lebenszyklus; **nur bei `mode = "pseudonymizing"` geparst** (Fallstrick 4). |
 | `[…​.ner]` | Tabelle | — | NER-Stufe + Anonymisierungs-Identität (Rev. 12). Wird **immer** geparst, wenn der Block existiert — nicht nur bei `mode = "pii_ner"`, weil ein Request den Modus wechseln darf. Siehe §6a. |
+| `[…​.rotation]` | Tabelle | — | Modell-Rotation (Rev. 16, §4.5): `policy` + `[[…rotation.models]]`. Ohne den Block ist `model: "auto"` fail-closed gesperrt. Siehe §6b. |
 
 `strategy` bleibt als Parse-Alias für `mode` bestehen (Rev. 9, `policy.py:140`) — für neue
 Profile nicht mehr verwenden.
@@ -203,6 +204,63 @@ curl 'http://127.0.0.1:17800/v1/anonymization-identity?profile=prismclaw-ner'
 
 ---
 
+## 6b. `[profile."…".rotation]` — bewusst wechselnde Modelle (Rev. 16)
+
+Ein Profil deklariert hier die Modelle, die sein Konsument als **austauschbar** ansieht.
+Erst dann darf ein Request mit `model: "auto"` darum bitten, dass Sluice eines davon wählt.
+
+```toml
+[profile."crate"]
+provider_allowlist  = ["anthropic", "gemini"]      # die Rotation ist eine TEILMENGE davon
+  [profile."crate".rotation]
+  policy            = "random"                     # random (Default) | headroom
+  [[profile."crate".rotation.models]]
+  provider          = "anthropic"
+  model             = "claude-opus-5"
+  min_output_tokens = 16000
+  [[profile."crate".rotation.models]]
+  provider          = "gemini"
+  model             = "gemini-2.5-pro"
+```
+
+**Wofür — und wofür nicht.** Für zustandslose Aufrufe, bei denen Vielfalt der Zweck ist
+(Crate fragt je Lauf ein anderes Modell, damit die Vorauswahl über viele Läufe breiter
+wird). **Nicht** für Ausfallsicherheit: es wird **einmal vor** dem Aufruf gewählt und bei
+einem Fehlschlag **nicht** ausgewichen. Ein stiller Ausweich-Versuch verstecke genau die
+Information, die man sammeln will — welches Modell unzuverlässig ist.
+
+**Zwei Opt-ins.** Der Block *und* `model: "auto"` im Request. Ein konkret genanntes Modell
+wird nie ersetzt: wer `claude-opus-5` schickt, bekommt genau das oder eine Absage.
+
+| Feld | Typ | Default | Wirkung |
+|---|---|---|---|
+| `policy` | String | `"random"` | `random` = zustandslos, gleichverteilt über viele Läufe. `headroom` = größtes gemeldetes Restkontingent (§7.6); ohne Telemetrie entscheidet der Zufall. |
+| `models[].provider` | String | — | **Pflicht.** Muss in `provider_allowlist` stehen. |
+| `models[].model` | String | — | **Pflicht.** Der Modellname, wie der Provider ihn kennt. |
+| `models[].min_output_tokens` | Int | `0` | Untergrenze fürs Token-Budget **dieses** Modells. Sluice **hebt** `max_tokens` darauf an, senkt es nie. |
+
+**`min_output_tokens` ist der Fallstrick, der am teuersten ist.** Ein Reasoning-Modell
+verbraucht sein Budget zuerst mit internem Nachdenken. Ist es zu knapp, kommt eine
+**leere** Antwort zurück — *nicht* eine abgeschnittene. Ein Konsument, der auf
+abgeschnittenes JSON eingestellt ist, sucht dann in die falsche Richtung. Wer ein
+Reasoning-Modell in die Rotation nimmt, trägt hier seine Untergrenze ein; sonst schickt
+der Konsument eine Zahl, die für *sein* Standardmodell passt, und bekommt ein anderes.
+
+**Ladeprüfungen (der Dienst startet sonst nicht):** ein `provider` außerhalb der
+`provider_allowlist`; ein deklarierter Block **ohne** `models`; ein Eintrag ohne
+`provider`/`model`; ein doppelter `provider`/`model`-Eintrag (das wäre unter `random` eine
+unsichtbare Gewichtung — Gewichte gibt es bewusst nicht); eine unbekannte `policy`.
+
+> **Fallstrick 6:** Wer die Rotation um einen Anbieter erweitert, trägt ihn **zuerst** in
+> `provider_allowlist` ein. Sonst startet der Dienst nach dem Reload gar nicht mehr —
+> laut, aber an einer Stelle, an der man den Grund nicht vermutet.
+
+**Was der Konsument zurückbekommt:** das `model`-Feld der Antwort trägt das *tatsächlich*
+benutzte Modell (aus der Provider-Antwort), nie `"auto"` und nie das Angefragte. Wer
+Bewertungen je Modell führt, speichert dieses Feld — nicht das, was er gesendet hat.
+
+---
+
 ## 6. `[profile."…".reversible]`
 
 Nur bei `mode = "pseudonymizing"` (`policy.py:150`).
@@ -232,6 +290,7 @@ Die App kann pro Request abweichen — **jede Wahl läuft trotzdem durchs Gate**
 | `mode` im Body | überschreibt den Profil-Modus (§7.2) | muss `allowed_modes` genügen, sonst 403; unbekannter Name 400 |
 | `purpose` | wählt den Zweck | muss in `allowed_purposes` stehen; fehlt er, gilt **der erste Eintrag** |
 | `provider` | wählt den Provider | muss in `provider_allowlist` stehen; fehlt er, gilt **der erste Eintrag** |
+| `model: "auto"` | bittet um Rotation (§6b) | Profil braucht `[…​.rotation]`, sonst 403; ein zusätzlich genannter `provider` engt die Menge ein |
 | `X-Sluice-Scope` | Mapping-Isolation | — |
 
 Modus-Aliase im Request (`server.py:66`): `reversible` → `pseudonymizing`,
@@ -324,3 +383,6 @@ provider_allowlist  = []
 | 403 bei `passthrough` | fehlendes `allowed_modes`-Opt-in (Rev. 11) | `allowed_modes = ["passthrough"]` |
 | 500 `sluice_provider_config` | `SLUICE_GATEWAY_<PROVIDER>_URL` fehlt | `/etc/sluice/sluice.env`, Gateway-Dienst läuft? |
 | Egress geht an den falschen Provider | App schickt kein `provider` → erster Allowlist-Eintrag (Fallstrick 5) | Reihenfolge in `provider_allowlist` |
+| Service startet nach Rotations-Änderung nicht | `rotation.models` nennt einen Provider außerhalb der `provider_allowlist` (Fallstrick 6), leerer Block, Duplikat oder unbekannte `policy` | `journalctl -u sluice` — der Ladefehler nennt Profil und Index |
+| 403 „Rotationsmenge" bei `model: "auto"` | Profil hat keinen `[…​.rotation]`-Block, oder der genannte `provider` kommt darin nicht vor | §6b |
+| Leere Antwort statt Trackliste, `finish_reason: "length"` | Reasoning-Modell rotiert, `min_output_tokens` fehlt für diesen Eintrag | §6b, Untergrenze eintragen |

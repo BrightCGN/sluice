@@ -673,7 +673,55 @@ sudo systemctl start sluice-ner
 Kommt hier **200**, ist irgendwo doch ein Fallback eingebaut — das wäre ein Chokepoint,
 der bei Ausfall durchlässiger wird, und damit keiner. Nicht in Betrieb nehmen.
 
-Erst wenn 7.1–7.5 (und ggf. 7.6) wie beschrieben antworten, Konsumenten auf die VM
+**7.7 Modell-Rotation (nur wenn ein Profil `[…​.rotation]` deklariert, §4.5, Rev. 16):**
+
+Zwei Proben — die zweite ist die wichtigere.
+
+```bash
+# a) `auto` rotiert: mehrfach aufrufen und schauen, ob das model-Feld wechselt.
+for i in 1 2 3 4 5 6; do
+  curl -s -X POST http://${SLUICE_HOST}:8000/v1/chat/completions \
+    -H 'content-type: application/json' -H 'X-Sluice-Profile: crate' \
+    -d '{"messages":[{"role":"user","content":"Antworte mit einem Wort: ok"}],
+         "model":"auto"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["model"])'
+done
+# → über mehrere Läufe verschiedene Modellnamen (zustandslos/zufällig, §4.5).
+#   NIE "auto": das model-Feld trägt IMMER das tatsächlich benutzte Modell.
+
+# b) Ein GENANNTES Modell wird nie ersetzt — die eigentliche Zusage.
+curl -s -X POST http://${SLUICE_HOST}:8000/v1/chat/completions \
+  -H 'content-type: application/json' -H 'X-Sluice-Profile: crate' \
+  -d '{"messages":[{"role":"user","content":"ok"}],"model":"claude-sonnet-5"}' \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["model"])'
+# → claude-sonnet-5(-<datum>). Kommt hier ein anderes Modell zurück, ist die
+#   Rotations-Grenze verletzt — nicht in Betrieb nehmen.
+```
+
+Ohne Rotationsblock im Profil muss `"model":"auto"` mit **403** abgewiesen werden (kein
+Default-Modell):
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  http://${SLUICE_HOST}:8000/v1/chat/completions \
+  -H 'content-type: application/json' -H 'X-Sluice-Profile: temper' \
+  -d '{"messages":[{"role":"user","content":"hi"}],"model":"auto"}'
+# → 403
+```
+
+**7.8 Kapazitäts-Telemetrie (§7.6, Rev. 16):**
+
+```bash
+curl -s http://${SLUICE_HOST}:8000/v1/capacity
+# → {"scope":"instance","best_effort":true,"records":[{"provider":"anthropic",…,
+#     "usage":{"total_tokens":…},"rate_limit":{"headroom":0.87,…}}]}
+```
+
+`records: []` direkt nach einem Neustart ist **richtig** — der Stand ist in-memory und pro
+Instanz. `rate_limit: null` bei einem Provider, der keine Rate-Limit-Header schickt (Gemini),
+ist ebenfalls richtig: **unbekannt ist nicht null.** Steht dort ein Kopfstand voller Nullen,
+stimmt etwas nicht.
+
+Erst wenn 7.1–7.5 (und ggf. 7.6–7.8) wie beschrieben antworten, Konsumenten auf die VM
 zeigen lassen.
 
 ---

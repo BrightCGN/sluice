@@ -59,6 +59,7 @@ async def guarded_egress(
     payload: EgressPayload,
     scope: Scope | None = None,
     provider_target: str | None = None,
+    provider_selection: str | None = None,
     mode: Mode | None = None,
     audit: AuditLog | None = None,
 ) -> EgressOutcome:
@@ -69,6 +70,11 @@ async def guarded_egress(
     payload:         Roh-Text (nur Audit) + Egress-Kandidat (je nach Modus-Form).
     scope:           Mapping-Scope, nur für pseudonymizing relevant (§8).
     provider_target: Ziel-Provider; wird gegen die Profil-Allowlist geprüft (§4.1).
+    provider_selection: Begründung, falls **Sluice** das Ziel gewählt hat (Rotation,
+                     §4.5) — geht unverändert ins Audit. None = der Konsument hat es
+                     selbst benannt. Die Prüfung gegen die Allowlist ist davon
+                     unberührt: ein rotiertes Ziel wird genauso geprüft wie ein
+                     genanntes.
     mode:            Injektion für Tests; sonst per Profil gewählt (§3, der Schalter).
     audit:           Injektion für Tests; sonst das eine prozessweite egress_log (§6).
     """
@@ -100,6 +106,7 @@ async def guarded_egress(
             after=None,
             provider_target=provider_target,
             verifier_findings=findings,
+            provider_selection=provider_selection,
         )
         return EgressOutcome(
             released=False, sanitized_text=None, reason=reason, error_type=error_type
@@ -191,6 +198,7 @@ async def guarded_egress(
         before=_with_tools(payload.raw_text),
         after=_with_tools("\n".join(surfaces.texts)),
         provider_target=provider_target,
+        provider_selection=provider_selection,
     )
     return EgressOutcome(
         released=True,

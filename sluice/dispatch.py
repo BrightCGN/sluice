@@ -17,6 +17,8 @@ from dataclasses import dataclass
 import structlog
 
 from sluice.audit import AuditLog
+from sluice.capacity import CapacityStore, StreamTelemetry, Usage
+from sluice.capacity import capacity_store as _default_capacity
 from sluice.dialect import messages_carry_tool_artifacts
 from sluice.guard import guarded_egress
 from sluice.policy import Profile
@@ -51,6 +53,9 @@ class CompletionOutcome:
     # und der normalisierte Stop-Grund. None/`"stop"` = kein Tool-Call.
     tool_calls: list[dict[str, object]] | None = None
     finish_reason: str | None = None
+    # Rev. 16 (§7.6): Token-Verbrauch dieses Aufrufs, sofern der Provider ihn meldet.
+    # None = unbekannt, nicht null.
+    usage: Usage | None = None
 
 
 @dataclass
@@ -89,6 +94,7 @@ async def _guard(
     payload: EgressPayload,
     scope: Scope | None,
     provider_target: str,
+    provider_selection: str | None,
     mode: Mode | None,
     audit: AuditLog | None,
 ) -> tuple[list[dict[str, object]] | None, Mode | None, str, str | None]:
@@ -99,6 +105,7 @@ async def _guard(
         payload=payload,
         scope=scope,
         provider_target=provider_target,
+        provider_selection=provider_selection,
         mode=mode,
         audit=audit,
     )
@@ -126,6 +133,8 @@ async def guarded_completion(
     mode: Mode | None = None,
     audit: AuditLog | None = None,
     adapter: ProviderAdapter | None = None,
+    provider_selection: str | None = None,
+    capacity: CapacityStore | None = None,
 ) -> CompletionOutcome:
     """Geguardete Completion: Gate → Modus → Verifier → Audit → Provider → reverse.
 
@@ -139,6 +148,16 @@ async def guarded_completion(
     (§1). Der Guard verifiziert die Specs als `readonly`-Fläche (geprüft, nie
     umgeschrieben) — deshalb ist Tool-Calling seit Rev. 15 unter **jedem** Modus möglich,
     nicht nur unter `passthrough`. Hier bleibt nur die Adapter-Fähigkeit zu prüfen.
+
+    **Rotation (Rev. 16, §4.5)** passiert NICHT hier: `provider_target`/`model` stehen
+    schon fest, wenn der Dispatch beginnt. Er bekommt nur `provider_selection` — die
+    Begründung fürs Audit — durchgereicht. So bleibt die Reihenfolge unverändert
+    (Wahl → Gate → Modus → Verifier → Audit → Provider), und ein rotiertes Ziel wird
+    von der Allowlist (§4.1) genauso geprüft wie ein vom Konsumenten genanntes.
+
+    **Kein stilles Ausweichen:** scheitert der gewählte Provider, ist das ein Fehler mit
+    Namen — kein Retry auf einem anderen. Sonst verstecke man genau die Information, die
+    die Rotation sammeln soll: welches Modell unzuverlässig ist (§4.5/§10).
     """
     unsupported = _tool_capability_reason(payload, provider_target)
     if unsupported is not None:
@@ -150,6 +169,7 @@ async def guarded_completion(
         payload=payload,
         scope=scope,
         provider_target=provider_target,
+        provider_selection=provider_selection,
         mode=mode,
         audit=audit,
     )
@@ -159,6 +179,16 @@ async def guarded_completion(
     provider = adapter if adapter is not None else select_egress_adapter(provider_target)
     extra = {"tools": payload.tools} if payload.tools else {}
     response = await provider.complete(messages, model=model, max_tokens=max_tokens, **extra)
+
+    # Kapazitäts-Telemetrie verbuchen (Rev. 16, §7.6) — mit dem Modell, das TATSÄCHLICH
+    # geantwortet hat, nicht dem angefragten. Der Aufruf zählt auch dann, wenn nichts
+    # gemeldet wurde: dass gerufen wurde, ist selbst eine Auskunft.
+    (capacity if capacity is not None else _default_capacity).record(
+        provider=response.provider or provider_target,
+        model=response.model or model,
+        usage=response.usage,
+        rate_limit=response.rate_limit,
+    )
 
     effective_scope = scope if scope is not None else _DEFAULT_SCOPE
     text = response.text
@@ -185,6 +215,12 @@ async def guarded_completion(
         provider=response.provider,
         model=response.model,
         tool_calls=len(response.tool_calls),
+        # Token-Zahlen sind Metadaten und gehören ins strukturierte Log, nicht in den
+        # egress_log-Eintrag (§6): der wird VOR dem Provider-Aufruf geschrieben und
+        # trägt die Freigabe-Entscheidung, nicht deren Kosten.
+        input_tokens=response.usage.input_tokens if response.usage else None,
+        output_tokens=response.usage.output_tokens if response.usage else None,
+        provider_selection=provider_selection,
     )
     return CompletionOutcome(
         released=True,
@@ -194,6 +230,7 @@ async def guarded_completion(
         model=response.model,
         tool_calls=tool_calls,
         finish_reason="tool_calls" if tool_calls else "stop",
+        usage=response.usage,
     )
 
 
@@ -209,6 +246,8 @@ async def guarded_stream(
     mode: Mode | None = None,
     audit: AuditLog | None = None,
     adapter: ProviderAdapter | None = None,
+    provider_selection: str | None = None,
+    capacity: CapacityStore | None = None,
 ) -> StreamOutcome:
     """Wie `guarded_completion`, aber streamend (§7.2).
 
@@ -243,6 +282,7 @@ async def guarded_stream(
         payload=payload,
         scope=scope,
         provider_target=provider_target,
+        provider_selection=provider_selection,
         mode=mode,
         audit=audit,
     )
@@ -256,8 +296,13 @@ async def guarded_stream(
         else None
     )
 
+    telemetry = StreamTelemetry()
+    store = capacity if capacity is not None else _default_capacity
+
     async def _chunks() -> AsyncIterator[str]:
-        async for delta in provider.stream(messages, model=model, max_tokens=max_tokens):
+        async for delta in provider.stream(
+            messages, model=model, max_tokens=max_tokens, telemetry=telemetry
+        ):
             out = reverser.feed(delta) if reverser is not None else delta
             if out:
                 yield out
@@ -265,5 +310,15 @@ async def guarded_stream(
             tail = reverser.flush()
             if tail:
                 yield tail
+        # Erst NACH dem letzten Delta verbuchen (Rev. 16, §7.6): vorher steht der
+        # Verbrauch eines Streams nicht fest. Bricht der Stream ab, wird nichts
+        # verbucht — ein halber Wert wäre im Snapshot von einem ganzen nicht zu
+        # unterscheiden.
+        store.record(
+            provider=provider_target,
+            model=model,
+            usage=telemetry.usage,
+            rate_limit=telemetry.rate_limit,
+        )
 
     return StreamOutcome(released=True, reason=reason, chunks=_chunks())

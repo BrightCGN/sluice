@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 
+from sluice.capacity import StreamTelemetry, usage_from_payload
 from sluice.providers import (
     PROVIDER_TIMEOUT,
     ProviderError,
@@ -204,14 +205,30 @@ class GeminiAdapter:
                 provider=self.name,
                 tool_calls=self._extract_tool_calls(data),
                 stop_reason=candidates[0].get("finishReason") if candidates else None,
+                # Rev. 16 (§7.6): Gemini meldet den Verbrauch als `usageMetadata`, aber
+                # KEINE Rate-Limit-Header. `rate_limit` bleibt deshalb None — unbekannt,
+                # nicht „voll": die Auswahl (§4.5) darf daraus keinen Headroom ableiten.
+                usage=usage_from_payload(data),
+                rate_limit=None,
             )
         finally:
             if self._client is None:
                 await client.aclose()
 
     async def stream(
-        self, messages: list[dict[str, Any]], *, model: str, max_tokens: int = 1024
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+        max_tokens: int = 1024,
+        telemetry: StreamTelemetry | None = None,
     ) -> AsyncIterator[str]:
+        """Text-Deltas; Verbrauch (Rev. 16, §7.6) landet in `telemetry`.
+
+        Gemini wiederholt `usageMetadata` in jedem Chunk mit dem bis dahin erreichten
+        Stand — der letzte gewinnt. Einen Rate-Limit-Kopfstand meldet die API nicht,
+        `telemetry.rate_limit` bleibt daher leer.
+        """
         client = self._client or httpx.AsyncClient(timeout=PROVIDER_TIMEOUT)
         try:
             async with client.stream(
@@ -226,7 +243,10 @@ class GeminiAdapter:
                 async for line in resp.aiter_lines():
                     if not line.startswith("data:"):
                         continue
-                    chunk = self._extract_text(json.loads(line[5:].strip()))
+                    event = json.loads(line[5:].strip())
+                    if telemetry is not None and event.get("usageMetadata"):
+                        telemetry.usage = usage_from_payload(event)
+                    chunk = self._extract_text(event)
                     if chunk:
                         yield chunk
         finally:

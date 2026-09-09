@@ -26,6 +26,8 @@ from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
+from sluice.capacity import RateLimit, StreamTelemetry, Usage
+
 # Endlicher Connect-, kein Read-Timeout (§7.3 / Code-Konventionen).
 PROVIDER_TIMEOUT = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0)
 
@@ -58,6 +60,12 @@ class ProviderResponse:
 
     Rev. 14: `tool_calls`/`stop_reason` tragen den Tool-Calling-Rückweg (§7.2). Leer/None
     = kein Tool-Call (Verhalten bis Rev. 13 unverändert) — beides additiv defaultet.
+
+    Rev. 16: `usage`/`rate_limit` tragen die Kapazitäts-Telemetrie (§7.6). **`None` heißt
+    unbekannt, nicht null** — ein Provider ohne Rate-Limit-Header (Gemini) ist etwas
+    anderes als einer mit aufgebrauchtem Kontingent. Bis Rev. 15 wurde beides an dieser
+    Stelle weggeworfen; damit war die eine Stelle, an der alle Egress-Aufrufe
+    vorbeikommen, zugleich die einzige, die nichts über die Auslastung sagen konnte.
     """
 
     text: str
@@ -65,6 +73,8 @@ class ProviderResponse:
     provider: str
     tool_calls: tuple[ToolCall, ...] = ()
     stop_reason: str | None = None
+    usage: Usage | None = None
+    rate_limit: RateLimit | None = None
 
 
 @runtime_checkable
@@ -92,9 +102,21 @@ class ProviderAdapter(Protocol):
         ...
 
     def stream(
-        self, messages: list[dict[str, Any]], *, model: str, max_tokens: int = 1024
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+        max_tokens: int = 1024,
+        telemetry: StreamTelemetry | None = None,
     ) -> AsyncIterator[str]:
-        """Text-Deltas der Antwort als async Iterator (SSE-normalisiert)."""
+        """Text-Deltas der Antwort als async Iterator (SSE-normalisiert).
+
+        Rev. 16 (§7.6): `telemetry` ist eine optionale **Senke** für Verbrauch und
+        Rate-Limit-Stand. Ein Stream liefert Text; die Kapazitätsdaten fallen erst am
+        Ende an. Sie über denselben Iterator zu yielden hieße, jeden Konsumenten die
+        Unterscheidung tragen zu lassen — ein vergessener Zweig wäre stiller
+        Datenverlust. Ein Adapter, der nichts messen kann, lässt die Senke leer.
+        """
         ...
 
 
@@ -191,6 +213,9 @@ __all__ = [
     "PROVIDER_TIMEOUT",
     "TOOL_CAPABLE_PROVIDERS",
     "ProviderAdapter",
+    "RateLimit",
+    "StreamTelemetry",
+    "Usage",
     "canonical_provider",
     "ProviderConfigError",
     "ProviderError",

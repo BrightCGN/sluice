@@ -19,6 +19,11 @@ from sluice.dialect import (
     to_openai_messages,
     to_openai_tools,
 )
+from sluice.capacity import (
+    StreamTelemetry,
+    rate_limit_from_headers,
+    usage_from_payload,
+)
 from sluice.providers import (
     PROVIDER_TIMEOUT,
     ProviderError,
@@ -32,6 +37,11 @@ class OpenAICompatAdapter:
     name: str = "openai-compat"
     key_env: str = ""
     default_base_url: str = ""
+    # Rev. 16 (§7.6): OpenAI liefert den Verbrauch im Stream nur auf Anforderung
+    # (`stream_options.include_usage`). Das ist **nicht** bei jedem Anbieter dieses
+    # Dialekts gültig — ein unbekanntes Feld quittieren manche mit 400. Die Subklasse
+    # erklärt es deshalb ausdrücklich, statt dass die Basis es für alle rät.
+    stream_usage_option: bool = False
 
     def __init__(
         self,
@@ -98,21 +108,37 @@ class OpenAICompatAdapter:
                     for c in parsed
                 ),
                 stop_reason=choices[0].get("finish_reason"),
+                # Rev. 16 (§7.6): `usage` aus dem Body, `x-ratelimit-*` aus den Headern.
+                usage=usage_from_payload(data),
+                rate_limit=rate_limit_from_headers(resp.headers, prefix="x"),
             )
         finally:
             if self._client is None:
                 await client.aclose()
 
     async def stream(
-        self, messages: list[dict[str, Any]], *, model: str, max_tokens: int = 1024
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+        max_tokens: int = 1024,
+        telemetry: StreamTelemetry | None = None,
     ) -> AsyncIterator[str]:
+        """Text-Deltas; Kapazitätsdaten (Rev. 16, §7.6) landen in `telemetry`.
+
+        Der Kopfstand steht in den Antwort-Headern und ist damit sofort da; der
+        Verbrauch kommt — wenn überhaupt — in einem letzten Chunk *ohne* `choices`.
+        Der wird ausgewertet, aber nie als Text ausgegeben.
+        """
         client = self._client or httpx.AsyncClient(timeout=PROVIDER_TIMEOUT)
-        body = {
+        body: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
             "messages": to_openai_messages(messages),
             "stream": True,
         }
+        if telemetry is not None and self.stream_usage_option:
+            body["stream_options"] = {"include_usage": True}
         try:
             async with client.stream(
                 "POST", f"{self._base_url}/chat/completions", headers=self._headers(), json=body
@@ -120,6 +146,8 @@ class OpenAICompatAdapter:
                 if resp.status_code != 200:
                     detail = (await resp.aread()).decode(errors="replace")[:500]
                     raise ProviderError(f"{self.name}: HTTP {resp.status_code}: {detail}")
+                if telemetry is not None:
+                    telemetry.rate_limit = rate_limit_from_headers(resp.headers, prefix="x")
                 async for line in resp.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -127,6 +155,8 @@ class OpenAICompatAdapter:
                     if payload == "[DONE]":
                         break
                     event = json.loads(payload)
+                    if telemetry is not None and event.get("usage"):
+                        telemetry.usage = usage_from_payload(event)
                     choices = event.get("choices") or []
                     if choices:
                         delta = choices[0].get("delta", {}).get("content")
