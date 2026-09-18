@@ -46,13 +46,27 @@ detector_profile    = "code"
   storage           = "memory"
 
 
-# `strict` redigiert selbst (substituiert [EMAIL]/[IP]/[NAME]) — der richtige Modus,
+# `pii_regex` redigiert selbst (substituiert [EMAIL]/[IP]/[NAME]) — der richtige Modus,
 # wenn der Konsument rohen Text schickt (Crates Kuratierungs-Thema) und die Antwort
 # nichts zurückzumappen braucht. `dictionary_terms` (Rev. 10) deckt freie Namen/Adressen
-# ab, die die Regex-Detektoren nicht fangen. Kein `allowed_modes` nötig — `strict` ist
-# verifizierend und per leerer Allowlist frei (Rev. 11).
+# ab, die die Regex-Detektoren nicht fangen. Kein `allowed_modes` nötig — `pii_regex` ist
+# verifizierend (`enforce_verifier = True`) und per leerer Allowlist frei (Rev. 11).
+#
+# WARUM NICHT `strict`? Beide geben dieselbe Zusage (irreversibel, Verifier fail-closed,
+# `dictionary_terms` werden mit-redigiert) und fahren dieselben Profil-Muster. Der
+# Unterschied liegt in der Mechanik: `strict` substituiert über sequentielle `re.sub`-
+# Ketten, `pii_regex` arbeitet SPAN-BASIERT (`sluice/spans.py`). Daraus folgen zwei
+# Vorteile, die genau hier zaehlen:
+#   1. Ueberlappende Treffer werden nach LAENGE aufgeloest statt nach Deklarations-
+#      reihenfolge — ein Treffer kann nicht mehr von einem frueheren Muster zerschnitten
+#      werden (aus "[EMAIL]" wird nicht "[IP]@rest").
+#   2. Es ist die Vorstufe von `pii_ner` (Rev. 12): freie Namen/Adressen, die heute nur
+#      ueber `dictionary_terms` gedeckt sind, lassen sich spaeter durch Umschalten auf
+#      `pii_ner` additiv per Modell erkennen — dieselbe Regex-Stufe bleibt darunter.
+# `strict` bleibt der Auslieferungs-Default der anderen Profile und ist nicht schlechter,
+# nur aelter.
 [profile."crate"]
-mode                = "strict"
+mode                = "pii_regex"
 egress_enabled      = true
 allowed_purposes    = ["playlist_curation"]
 provider_allowlist  = ["anthropic", "gemini"]
