@@ -69,7 +69,12 @@ detector_profile    = "code"
 mode                = "pii_regex"
 egress_enabled      = true
 allowed_purposes    = ["playlist_curation"]
-provider_allowlist  = ["anthropic", "gemini"]
+# Vier Anbieter: Crates Kuratierung rotiert bewusst ueber mehrere HAEUSER, nicht
+# nur ueber mehrere Modelle desselben Hauses — zwei Modelle eines Anbieters teilen
+# Trainingsdaten und Geschmack, die Vorauswahl wird davon kaum breiter. Jeder
+# Eintrag braucht ein laufendes Gateway (sluice-gateway@<provider>) mit gueltigem
+# Key; ein Provider, der hier fehlt, wird fail-closed abgewiesen.
+provider_allowlist  = ["anthropic", "gemini", "openai", "mistral"]
 detector_profile    = ["media", "pii_de"]   # Vereinigungsmenge (Rev. 13, §5.1)
 # ACHTUNG: Die Listen-Schreibweise braucht Sluice-Code ab Spec-Rev. 13. Auf einer
 # älteren Installation landet die Liste ungeprüft im Profil und das Profil crasht
@@ -103,7 +108,16 @@ dictionary_terms    = ["<haushaltsname>", "<strasse hausnr>"]  # echte Namens-/A
   min_output_tokens = 16000
   [[profile."crate".rotation.models]]
   provider          = "gemini"
-  model             = "gemini-2.5-pro"
+  model             = "gemini-3.8-flash"
+  min_output_tokens = 16000          # denkt intern (low|medium|high; „minimal" wird abgelehnt)
+  [[profile."crate".rotation.models]]
+  provider          = "openai"
+  model             = "gpt-5.6-terra"
+  min_output_tokens = 16000
+  [[profile."crate".rotation.models]]
+  provider          = "mistral"
+  model             = "mistral-large-latest"
+  min_output_tokens = 16000
 
 
 # --- Rev. 12: zweistufige PII-Erkennung (§5.3) ----------------------------------------
