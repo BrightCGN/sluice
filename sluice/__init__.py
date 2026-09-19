@@ -47,4 +47,11 @@ __all__ = [
     "verify_no_identifiers",
 ]
 
-__version__ = "0.1.0"
+# 0.2.0 (19.09.2026): Die Paketversion stand seit dem ersten Tag auf 0.1.0,
+# waehrend die Spec von Rev. 9 auf Rev. 16 gewachsen ist — Tool-Calling in
+# allen Adaptern (Rev. 14/15), zweistufige PII-Erkennung (Rev. 12),
+# Modell-Rotation samt Kapazitaets-Telemetrie (Rev. 16). Die Zahl holt das
+# nach. Die inhaltliche Fortschreibung bleibt die REVISION in
+# docs/SLUICE-BOUNDARY-SPEC.md; diese hier sagt nur, welcher Stand installiert
+# ist (pip/venv), und muss zu pyproject.toml passen.
+__version__ = "0.2.0"

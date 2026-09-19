@@ -42,7 +42,7 @@ class OpenAICompatAdapter:
     # Dialekts gültig — ein unbekanntes Feld quittieren manche mit 400. Die Subklasse
     # erklärt es deshalb ausdrücklich, statt dass die Basis es für alle rät.
     stream_usage_option: bool = False
-    # Rev. 17 (§7.3): OpenAI lehnt `max_tokens` fuer die GPT-5-Familie ab
+    # §7.3 (19.09.2026): OpenAI lehnt `max_tokens` fuer die GPT-5-Familie ab
     # ("Unsupported parameter ... Use 'max_completion_tokens' instead", HTTP 400)
     # — andere Anbieter dieses Dialekts (Mistral) nehmen weiterhin `max_tokens`.
     # Das Feld gehoert also in die Subklasse, nicht in eine Fallunterscheidung

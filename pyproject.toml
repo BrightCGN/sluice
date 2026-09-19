@@ -1,6 +1,6 @@
 [project]
 name = "sluice"
-version = "0.1.0"
+version = "0.2.0"
 description = "Die eine gemeinsame Sanitisierungs-Boundary: Profil-Gate → Modus → Verifier → Audit."
 readme = "README.md"
 requires-python = ">=3.11"

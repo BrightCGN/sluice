@@ -12,7 +12,7 @@ class OpenAIAdapter(OpenAICompatAdapter):
     # Rev. 16 (§7.6): OpenAI liefert den Stream-Verbrauch nur, wenn man ihn anfordert.
     # Ohne dieses Opt-in bliebe die Telemetrie im Streaming-Pfad dauerhaft leer.
     stream_usage_option = True
-    # Rev. 17 (§7.3): Die GPT-5-Familie weist `max_tokens` mit HTTP 400 zurueck
+    # §7.3 (19.09.2026): Die GPT-5-Familie weist `max_tokens` mit HTTP 400 zurueck
     # ("Unsupported parameter: 'max_tokens' is not supported with this model.
     # Use 'max_completion_tokens' instead."). `max_completion_tokens` nehmen die
     # aktuellen Chat-Completions-Modelle durchgaengig an, es ist der Nachfolger
