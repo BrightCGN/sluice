@@ -131,6 +131,61 @@ async def test_mistral_stream_stops_at_done() -> None:
     assert chunks == ["Bon", "jour"]
 
 
+async def test_openai_sends_max_completion_tokens_not_max_tokens() -> None:
+    """Die GPT-5-Familie weist `max_tokens` mit HTTP 400 zurueck (Rev. 17, §7.3).
+
+    Beobachtet im Betrieb, nachdem das Guthaben stand:
+      "Unsupported parameter: 'max_tokens' is not supported with this model.
+       Use 'max_completion_tokens' instead."
+    """
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200, json={"model": "gpt-x", "choices": [{"message": {"content": "OK"}}]}
+        )
+
+    adapter = OpenAIAdapter(api_key="k", http_client=_client(handler))
+    await adapter.complete(MESSAGES, model="gpt-x", max_tokens=16000)
+    assert seen["body"]["max_completion_tokens"] == 16000
+    assert "max_tokens" not in seen["body"]      # sonst quittiert OpenAI mit 400
+
+
+async def test_openai_stream_uses_the_same_field() -> None:
+    """Zwei Pfade, ein Dialekt — sonst geht nur einer von beiden kaputt."""
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return _sse(json.dumps({"choices": [{"delta": {"content": "OK"}}]}), "[DONE]")
+
+    adapter = OpenAIAdapter(api_key="k", http_client=_client(handler))
+    [c async for c in adapter.stream(MESSAGES, model="gpt-x", max_tokens=16000)]
+    assert seen["body"]["max_completion_tokens"] == 16000
+    assert "max_tokens" not in seen["body"]
+
+
+async def test_mistral_keeps_max_tokens() -> None:
+    """Der Dialekt ist geteilt, das Feld nicht: Mistral nimmt weiterhin max_tokens.
+
+    Deshalb sitzt der Feldname in der Subklasse und nicht in einer
+    Fallunterscheidung nach Modellnamen in der Basis.
+    """
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200, json={"model": "m", "choices": [{"message": {"content": "OK"}}]}
+        )
+
+    adapter = MistralAdapter(api_key="k", http_client=_client(handler))
+    await adapter.complete(MESSAGES, model="mistral-large-latest", max_tokens=16000)
+    assert seen["body"]["max_tokens"] == 16000
+    assert "max_completion_tokens" not in seen["body"]
+
+
 # ---------- Gemini ----------
 
 

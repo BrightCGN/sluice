@@ -42,6 +42,13 @@ class OpenAICompatAdapter:
     # Dialekts gültig — ein unbekanntes Feld quittieren manche mit 400. Die Subklasse
     # erklärt es deshalb ausdrücklich, statt dass die Basis es für alle rät.
     stream_usage_option: bool = False
+    # Rev. 17 (§7.3): OpenAI lehnt `max_tokens` fuer die GPT-5-Familie ab
+    # ("Unsupported parameter ... Use 'max_completion_tokens' instead", HTTP 400)
+    # — andere Anbieter dieses Dialekts (Mistral) nehmen weiterhin `max_tokens`.
+    # Das Feld gehoert also in die Subklasse, nicht in eine Fallunterscheidung
+    # nach Modellnamen: eine Namensliste muesste man bei jedem neuen Modell
+    # nachpflegen, und trifft sie daneben, scheitert der Aufruf erst beim Provider.
+    max_tokens_field: str = "max_tokens"
 
     def __init__(
         self,
@@ -69,7 +76,7 @@ class OpenAICompatAdapter:
         client = self._client or httpx.AsyncClient(timeout=PROVIDER_TIMEOUT)
         body: dict[str, Any] = {
             "model": model,
-            "max_tokens": max_tokens,
+            self.max_tokens_field: max_tokens,
             # Neutral → nativ (§7.3). Für diese Provider-Familie ist „nativ" der
             # OpenAI-Dialekt, deshalb dieselbe Abbildung wie am Endpoint (§7.2) statt
             # einer zweiten, die auseinanderlaufen könnte.
@@ -133,7 +140,7 @@ class OpenAICompatAdapter:
         client = self._client or httpx.AsyncClient(timeout=PROVIDER_TIMEOUT)
         body: dict[str, Any] = {
             "model": model,
-            "max_tokens": max_tokens,
+            self.max_tokens_field: max_tokens,
             "messages": to_openai_messages(messages),
             "stream": True,
         }
