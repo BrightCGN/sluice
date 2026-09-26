@@ -6,11 +6,12 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
+from structlog.testing import capture_logs
 
 from sluice.capacity import StreamTelemetry, Usage
 from sluice.audit import AuditLog
 from sluice.policy import Profile, ReversibleConfig
-from sluice.providers import ProviderResponse
+from sluice.providers import ProviderError, ProviderResponse
 from sluice.server import create_app
 
 PROFILES = {
@@ -324,3 +325,28 @@ async def test_request_passthrough_without_opt_in_is_403() -> None:
     assert resp.status_code == 403
     assert "Opt-in" in resp.json()["error"]["reason"]  # geblockt am Modus, nicht am Gate
     assert adapter.calls == []
+
+
+# ---------- Betreiber-Log: Provider-Fehler mit Grund (nicht nur der Statuscode) ----------
+
+
+class FailingAdapter(FakeAdapter):
+    async def complete(
+        self, messages: list[dict[str, Any]], *, model: str, max_tokens: int = 1024
+    ) -> ProviderResponse:
+        raise ProviderError("gateway anthropic: HTTP 502: upstream kaputt")
+
+
+async def test_upstream_error_is_logged_with_reason() -> None:
+    client, _ = _client(FailingAdapter())
+    with capture_logs() as logs:
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={**BODY, "mode": "passthrough", "purpose": "external_escalation"},
+            headers={"X-Sluice-Profile": "temper"},
+        )
+    assert resp.status_code == 502
+    [entry] = [e for e in logs if e["event"] == "server.provider_upstream"]
+    assert entry["log_level"] == "warning"
+    assert entry["model"] == "claude-sonnet-5"
+    assert "upstream kaputt" in entry["reason"]

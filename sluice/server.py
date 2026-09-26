@@ -380,6 +380,12 @@ def create_app(
         try:
             adapter = adapter_factory(provider_target) if provider_target else None
         except ProviderConfigError as exc:
+            log.error(
+                "server.provider_config",
+                provider=provider_target,
+                model=model,
+                reason=str(exc),
+            )
             return JSONResponse(
                 {"error": {"type": "sluice_provider_config", "reason": str(exc)}}, status_code=500
             )
@@ -439,10 +445,25 @@ def create_app(
                 }
             )
         except ProviderConfigError as exc:
+            log.error(
+                "server.provider_config",
+                provider=provider_target,
+                model=model,
+                reason=str(exc),
+            )
             return JSONResponse(
                 {"error": {"type": "sluice_provider_config", "reason": str(exc)}}, status_code=500
             )
         except ProviderError as exc:
+            # Der Grund ging bisher nur an den Aufrufer — im Betreiber-Journal stand
+            # allein „502". Er gehört auch hierher: Provider-/Gateway-Fehlertext, schon
+            # im Adapter auf 500 Zeichen gekürzt; das Audit (§6) bleibt davon unberührt.
+            log.warning(
+                "server.provider_upstream",
+                provider=provider_target,
+                model=model,
+                reason=str(exc),
+            )
             return JSONResponse(
                 {"error": {"type": "sluice_provider_upstream", "reason": str(exc)}}, status_code=502
             )

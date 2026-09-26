@@ -7,10 +7,11 @@ from typing import Any
 
 import httpx
 import pytest
+from structlog.testing import capture_logs
 
 from sluice.capacity import StreamTelemetry, Usage
 from sluice.gateway import create_gateway_app
-from sluice.providers import ProviderConfigError, ProviderResponse
+from sluice.providers import ProviderConfigError, ProviderError, ProviderResponse
 
 
 class FakeAdapter:
@@ -99,3 +100,37 @@ async def test_missing_fields_are_bad_request() -> None:
     resp = await client.post("/v1/complete", json={"model": "m"})
     assert resp.status_code == 400
     assert adapter.calls == []
+
+
+class FailingAdapter(FakeAdapter):
+    async def complete(
+        self, messages: list[dict[str, Any]], *, model: str, max_tokens: int = 1024
+    ) -> ProviderResponse:
+        raise ProviderError("anthropic: HTTP 429: rate_limit_error")
+
+
+async def test_upstream_error_is_logged_with_reason() -> None:
+    # Der Provider-Fehlertext gehört ins Journal des Gateways, nicht nur in die Antwort.
+    client, _ = _client(FailingAdapter())
+    with capture_logs() as logs:
+        resp = await client.post("/v1/complete", json=BODY)
+    assert resp.status_code == 502
+    [entry] = [e for e in logs if e["event"] == "gateway.provider_upstream"]
+    assert entry["log_level"] == "warning"
+    assert entry["provider"] == "anthropic"
+    assert entry["model"] == "claude-sonnet-5"
+    assert "HTTP 429" in entry["reason"]
+
+
+async def test_config_error_is_logged() -> None:
+    def factory(name: str) -> FakeAdapter:
+        raise ProviderConfigError("ANTHROPIC_API_KEY fehlt")
+
+    app = create_gateway_app("anthropic", adapter_factory=factory)
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway")
+    with capture_logs() as logs:
+        resp = await client.post("/v1/complete", json=BODY)
+    assert resp.status_code == 500
+    [entry] = [e for e in logs if e["event"] == "gateway.provider_config"]
+    assert entry["log_level"] == "error"
+    assert "ANTHROPIC_API_KEY" in entry["reason"]

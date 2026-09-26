@@ -109,6 +109,7 @@ def create_gateway_app(
         try:
             adapter = adapter_factory(name)
         except ProviderConfigError as exc:
+            log.error("gateway.provider_config", provider=name, model=model, reason=str(exc))
             return _error(500, "gateway_config", str(exc))
 
         try:
@@ -162,8 +163,13 @@ def create_gateway_app(
                 result["rate_limit"] = response.rate_limit.as_dict()
             return JSONResponse(result)
         except ProviderConfigError as exc:
+            log.error("gateway.provider_config", provider=name, model=model, reason=str(exc))
             return _error(500, "gateway_config", str(exc))
         except ProviderError as exc:
+            # Hier entsteht der Provider-Fehlertext (Status + Body, im Adapter gekürzt) —
+            # ohne diese Zeile stünde er nur in der Antwort an den Kern, nicht im Journal
+            # des Gateways. Der Payload ist zu diesem Zeitpunkt bereits sanitisiert (§1).
+            log.warning("gateway.provider_upstream", provider=name, model=model, reason=str(exc))
             return _error(502, "gateway_upstream", str(exc))
 
     return Starlette(
