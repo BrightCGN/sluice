@@ -301,11 +301,20 @@ def create_app(
         if model == AUTO_MODEL:
             # Rotation (Rev. 16, §4.5). Der Request fragt sie ausdrücklich an; ohne
             # `auto` wählt Sluice NIE — ein genanntes Modell wird nie ersetzt.
+            # Beide Absagen hier liegen VOR dem Guard — sie erreichen weder das Audit noch
+            # sonst ein Log. Ohne diese Zeilen stünde im Journal nur „403" (§4.5).
             if effective is None:
-                return _blocked(
+                reason = (
                     "Default-Deny: kein (bekanntes) Profil, also auch keine "
                     "Rotationsmenge, aus der gewählt werden könnte (§4.3/§4.5)."
                 )
+                log.warning(
+                    "server.rotation_denied",
+                    profile=request.headers.get("X-Sluice-Profile") or None,
+                    provider=body.get("provider") or lock,
+                    reason=reason,
+                )
+                return _blocked(reason)
             try:
                 selection = select_rotation(
                     effective.rotation,
@@ -318,6 +327,12 @@ def create_app(
                     rng=rng,
                 )
             except RotationError as exc:
+                log.warning(
+                    "server.rotation_denied",
+                    profile=effective.name,
+                    provider=body.get("provider") or lock,
+                    reason=str(exc),
+                )
                 return _blocked(str(exc))
             provider_target = selection.provider
             model = selection.model

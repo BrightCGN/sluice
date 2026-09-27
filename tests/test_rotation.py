@@ -19,6 +19,7 @@ from typing import Any
 
 import httpx
 import pytest
+from structlog.testing import capture_logs
 
 from sluice.audit import AuditLog
 from sluice.capacity import CapacityStore, RateLimit, StreamTelemetry, Usage
@@ -125,6 +126,10 @@ def _client(
         adapter,
         audit,
     )
+
+
+def _rotation_denied(logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [e for e in logs if e["event"] == "server.rotation_denied"]
 
 
 def _profiles() -> dict[str, Profile]:
@@ -335,44 +340,57 @@ async def test_auto_without_a_declared_rotation_is_blocked_not_defaulted():
     )
     client, adapter, _ = _client(profiles)
     async with client:
-        resp = await client.post(
-            "/v1/chat/completions",
-            json={
-                "messages": [{"role": "user", "content": "hallo"}],
-                "model": "auto",
-                "purpose": "external_escalation",
-            },
-            headers={"X-Sluice-Profile": "temper"},
-        )
+        with capture_logs() as logs:
+            resp = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "messages": [{"role": "user", "content": "hallo"}],
+                    "model": "auto",
+                    "purpose": "external_escalation",
+                },
+                headers={"X-Sluice-Profile": "temper"},
+            )
     assert resp.status_code == 403
     assert "Rotationsmenge" in resp.json()["error"]["reason"]
     assert adapter.calls == []  # kein Provider berührt
+    # Die Absage liegt vor dem Guard — ohne eigene Log-Zeile stünde im Journal nur „403".
+    [entry] = _rotation_denied(logs)
+    assert entry["profile"] == "temper"
+    assert entry["reason"] == resp.json()["error"]["reason"]
 
 
 @pytest.mark.anyio
 async def test_auto_without_a_known_profile_is_default_deny():
     client, adapter, _ = _client(_profiles())
     async with client:
-        resp = await client.post(
-            "/v1/chat/completions",
-            json={**BODY, "model": "auto"},
-            headers={"X-Sluice-Profile": "gibt-es-nicht"},
-        )
+        with capture_logs() as logs:
+            resp = await client.post(
+                "/v1/chat/completions",
+                json={**BODY, "model": "auto"},
+                headers={"X-Sluice-Profile": "gibt-es-nicht"},
+            )
     assert resp.status_code == 403
     assert adapter.calls == []
+    [entry] = _rotation_denied(logs)
+    assert entry["profile"] == "gibt-es-nicht"  # der angefragte Name, nicht None
+    assert "Default-Deny" in entry["reason"]
 
 
 @pytest.mark.anyio
 async def test_auto_with_a_provider_outside_the_rotation_set_is_blocked():
     client, adapter, _ = _client(_profiles())
     async with client:
-        resp = await client.post(
-            "/v1/chat/completions",
-            json={**BODY, "model": "auto", "provider": "mistral"},
-            headers=HEADERS,
-        )
+        with capture_logs() as logs:
+            resp = await client.post(
+                "/v1/chat/completions",
+                json={**BODY, "model": "auto", "provider": "mistral"},
+                headers=HEADERS,
+            )
     assert resp.status_code == 403
     assert adapter.calls == []
+    [entry] = _rotation_denied(logs)
+    assert entry["provider"] == "mistral"
+    assert entry["log_level"] == "warning"
 
 
 @pytest.mark.anyio
