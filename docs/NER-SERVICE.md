@@ -184,9 +184,13 @@ verschiebt das proportional zur Parameterzahl, also um einen Faktor und nicht um
 Größenordnung: dieselbe Antwort. (Der zuvor hier als Ausweg genannte `fastino/…`-Checkpoint
 ist ohnehin nicht ladbar, siehe §4.)
 
-Zusätzlich: die VM hat **1 vCPU**, den sich Sluice-Kern, vier Gateway-Prozesse und der
-NER-Dienst teilen. Während einer Inferenz ist der Kern belegt — es warten nicht nur der
-eigene Request, sondern alle parallelen.
+Zusätzlich: zum Messzeitpunkt hatte die VM **1 vCPU**, den sich Sluice-Kern, vier
+Gateway-Prozesse und der NER-Dienst teilten. Während einer Inferenz war der Kern belegt —
+es warteten nicht nur der eigene Request, sondern alle parallelen. **Seit 2026-09-22 hat
+die VM 2 vCPU und 8 GB RAM.** Das nimmt den Kern und die Gateways aus der Warteschlange
+(die Inferenz belegt einen Kern, der andere bleibt frei), ändert aber an der Latenz
+*eines* Requests nichts: die läuft weiterhin auf einem gepinnten Thread (§5.4). Die
+Messwerte oben gelten unverändert.
 
 #### ONNX Runtime: gemessen am 2026-08-11 — und INT8 ist der falsche Weg
 
