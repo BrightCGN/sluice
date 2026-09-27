@@ -196,7 +196,10 @@ class GeminiAdapter:
                 json=self._body(messages, max_tokens=max_tokens, tools=tools),
             )
             if resp.status_code != 200:
-                raise ProviderError(f"gemini: HTTP {resp.status_code}: {resp.text[:500]}")
+                raise ProviderError(
+                    f"gemini: HTTP {resp.status_code}: {resp.text[:500]}",
+                    upstream_status=resp.status_code,
+                )
             data = resp.json()
             candidates = data.get("candidates") or []
             return ProviderResponse(
@@ -239,7 +242,10 @@ class GeminiAdapter:
             ) as resp:
                 if resp.status_code != 200:
                     detail = (await resp.aread()).decode(errors="replace")[:500]
-                    raise ProviderError(f"gemini: HTTP {resp.status_code}: {detail}")
+                    raise ProviderError(
+                        f"gemini: HTTP {resp.status_code}: {detail}",
+                        upstream_status=resp.status_code,
+                    )
                 async for line in resp.aiter_lines():
                     if not line.startswith("data:"):
                         continue

@@ -38,6 +38,20 @@ from sluice.providers import (
 log = structlog.get_logger("sluice.providers.remote")
 
 
+def _upstream_status(detail: str) -> int | None:
+    """Provider-Status aus dem Fehler-Body des Gateways (§7.4).
+
+    Nur, was das Gateway ausdrücklich meldet — nie der Status des Gateways selbst (der
+    ist bei einem Upstream-Fehler immer 502). Ein Gateway ohne das Feld, ein Body, der
+    kein JSON ist: `None`.
+    """
+    try:
+        value = json.loads(detail).get("error", {}).get("upstream_status")
+    except (ValueError, AttributeError):
+        return None
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
 class RemoteGatewayAdapter:
     """Leitet Completions an einen Sluice-Gateway-Service weiter (§7.3, Rev. 6)."""
 
@@ -62,7 +76,10 @@ class RemoteGatewayAdapter:
         # fail-closed, kein stiller Fallback (§7.3).
         if status == 500 and "gateway_config" in detail:
             raise ProviderConfigError(f"gateway {self.name}: {detail[:500]}")
-        raise ProviderError(f"gateway {self.name}: HTTP {status}: {detail[:500]}")
+        raise ProviderError(
+            f"gateway {self.name}: HTTP {status}: {detail[:500]}",
+            upstream_status=_upstream_status(detail),
+        )
 
     async def complete(
         self,

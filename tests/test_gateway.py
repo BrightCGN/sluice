@@ -106,7 +106,7 @@ class FailingAdapter(FakeAdapter):
     async def complete(
         self, messages: list[dict[str, Any]], *, model: str, max_tokens: int = 1024
     ) -> ProviderResponse:
-        raise ProviderError("anthropic: HTTP 429: rate_limit_error")
+        raise ProviderError("anthropic: HTTP 429: rate_limit_error", upstream_status=429)
 
 
 async def test_upstream_error_is_logged_with_reason() -> None:
@@ -120,6 +120,8 @@ async def test_upstream_error_is_logged_with_reason() -> None:
     assert entry["provider"] == "anthropic"
     assert entry["model"] == "claude-sonnet-5"
     assert "HTTP 429" in entry["reason"]
+    assert entry["upstream_status"] == 429
+    assert resp.json()["error"]["upstream_status"] == 429
 
 
 async def test_config_error_is_logged() -> None:

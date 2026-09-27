@@ -331,10 +331,22 @@ async def test_request_passthrough_without_opt_in_is_403() -> None:
 
 
 class FailingAdapter(FakeAdapter):
+    def __init__(self, upstream_status: int | None = 503) -> None:
+        super().__init__()
+        self.upstream_status = upstream_status
+
     async def complete(
         self, messages: list[dict[str, Any]], *, model: str, max_tokens: int = 1024
     ) -> ProviderResponse:
-        raise ProviderError("gateway anthropic: HTTP 502: upstream kaputt")
+        raise ProviderError(
+            "gateway anthropic: HTTP 502: upstream kaputt", upstream_status=self.upstream_status
+        )
+
+
+UPSTREAM_REQUEST = {
+    "json": {**BODY, "mode": "passthrough", "purpose": "external_escalation"},
+    "headers": {"X-Sluice-Profile": "temper"},
+}
 
 
 async def test_upstream_error_is_logged_with_reason() -> None:
@@ -350,3 +362,24 @@ async def test_upstream_error_is_logged_with_reason() -> None:
     assert entry["log_level"] == "warning"
     assert entry["model"] == "claude-sonnet-5"
     assert "upstream kaputt" in entry["reason"]
+    assert entry["upstream_status"] == 503
+
+
+async def test_upstream_status_reaches_the_consumer() -> None:
+    # Der eigene Status bleibt 502; der des Providers steht daneben, damit der
+    # Konsument „überlastet, später nochmal" von „kaputt" unterscheiden kann (§7.4).
+    client, _ = _client(FailingAdapter(503))
+    resp = await client.post("/v1/chat/completions", **UPSTREAM_REQUEST)
+    assert resp.status_code == 502
+    assert resp.json()["error"] == {
+        "type": "sluice_provider_upstream",
+        "reason": "gateway anthropic: HTTP 502: upstream kaputt",
+        "upstream_status": 503,
+    }
+
+
+async def test_unknown_upstream_status_is_absent_not_zero() -> None:
+    client, _ = _client(FailingAdapter(None))
+    resp = await client.post("/v1/chat/completions", **UPSTREAM_REQUEST)
+    assert resp.status_code == 502
+    assert "upstream_status" not in resp.json()["error"]

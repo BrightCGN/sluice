@@ -7,7 +7,7 @@ import json
 import httpx
 import pytest
 
-from sluice.providers import ProviderConfigError, select_provider
+from sluice.providers import ProviderConfigError, ProviderError, select_provider
 from sluice.providers.anthropic import AnthropicAdapter
 from sluice.providers.gemini import GeminiAdapter
 from sluice.providers.mistral import MistralAdapter
@@ -288,3 +288,76 @@ def test_select_egress_adapter_requires_gateway(
     # Unbekannter Provider bleibt ebenfalls fail-closed.
     with pytest.raises(ProviderConfigError, match="Unbekannter Provider"):
         select_egress_adapter("acme-llm")
+
+
+# ---------- upstream_status (§7.4): der Status des Providers, nie geraten ----------
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda c: AnthropicAdapter(api_key="k", http_client=c),
+        lambda c: OpenAIAdapter(api_key="k", http_client=c),
+        lambda c: MistralAdapter(api_key="k", http_client=c),
+        lambda c: GeminiAdapter(api_key="k", http_client=c),
+    ],
+)
+async def test_adapter_error_carries_upstream_status(make) -> None:
+    adapter = make(_client(lambda r: httpx.Response(503, text="high demand")))
+    with pytest.raises(ProviderError) as info:
+        await adapter.complete(MESSAGES, model="m")
+    assert info.value.upstream_status == 503
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda c: AnthropicAdapter(api_key="k", http_client=c),
+        lambda c: OpenAIAdapter(api_key="k", http_client=c),
+        lambda c: GeminiAdapter(api_key="k", http_client=c),
+    ],
+)
+async def test_adapter_stream_error_carries_upstream_status(make) -> None:
+    adapter = make(_client(lambda r: httpx.Response(429, text="slow down")))
+    with pytest.raises(ProviderError) as info:
+        async for _ in adapter.stream(MESSAGES, model="m"):
+            pass
+    assert info.value.upstream_status == 429
+
+
+async def test_remote_gateway_passes_provider_status_not_its_own() -> None:
+    from sluice.providers.remote import RemoteGatewayAdapter
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            502,
+            json={"error": {"type": "gateway_upstream", "reason": "x", "upstream_status": 503}},
+        )
+
+    adapter = RemoteGatewayAdapter(
+        provider="gemini", base_url="http://gw:17892", http_client=_client(handler)
+    )
+    with pytest.raises(ProviderError) as info:
+        await adapter.complete(MESSAGES, model="m")
+    assert info.value.upstream_status == 503
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(502, json={"error": {"type": "gateway_upstream", "reason": "x"}}),
+        httpx.Response(502, text="Bad Gateway"),
+        httpx.Response(502, json={"error": {"upstream_status": "503"}}),
+    ],
+)
+async def test_remote_gateway_without_status_field_reports_none(response) -> None:
+    # Älteres Gateway, Proxy-Fehlerseite, Unsinn im Feld: unbekannt bleibt unbekannt —
+    # insbesondere nicht die 502 des Gateways als Provider-Status ausgeben.
+    from sluice.providers.remote import RemoteGatewayAdapter
+
+    adapter = RemoteGatewayAdapter(
+        provider="gemini", base_url="http://gw:17892", http_client=_client(lambda r: response)
+    )
+    with pytest.raises(ProviderError) as info:
+        await adapter.complete(MESSAGES, model="m")
+    assert info.value.upstream_status is None

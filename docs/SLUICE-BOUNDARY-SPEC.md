@@ -1096,6 +1096,15 @@ Sluice ist ab jetzt eine **Abhängigkeit mit Vertrag** — ein Breaking Change t
 Konsumenten gleichzeitig. `Accept: application/vnd.sluice.v1+json` bzw. `/v1/…`-Pfad-Präfix
 und eine Kompatibilitätszusage von Beginn an, sonst wird jedes Update zur Drei-Repo-Migration.
 
+**`upstream_status` (additiv).** Scheitert der Aufruf beim Provider, antwortet Sluice mit
+**502 `sluice_provider_upstream`**; der HTTP-Status, den der *Provider* gemeldet hat, steht als
+`error.upstream_status` (int) daneben — damit der Konsument „überlastet, später nochmal"
+(503/429) von „kaputt" (400/401) unterscheiden kann, ohne `reason` zu parsen. Der eigene Status
+bleibt 502. Das Feld **fehlt**, wenn kein Provider-Status vorliegt (Formatfehler, nicht
+abbildbare Message, Gateway ohne das Feld) — nie `0`, nie die 502 des Gateways (§7.6: nichts
+Ungemessenes behaupten). Intern trägt das Gateway es auf demselben Weg (`gateway_upstream`).
+Die Entscheidung über einen Retry bleibt beim Konsumenten; Sluice selbst wiederholt nie (§4.5).
+
 ### 7.5 NER-Dienst (Revision 12)
 
 Ein **eigenständiger Prozess mit bewusst schmaler Schnittstelle**. Er tut genau eins: Text rein,

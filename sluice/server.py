@@ -462,11 +462,16 @@ def create_app(
                 "server.provider_upstream",
                 provider=provider_target,
                 model=model,
+                upstream_status=exc.upstream_status,
                 reason=str(exc),
             )
-            return JSONResponse(
-                {"error": {"type": "sluice_provider_upstream", "reason": str(exc)}}, status_code=502
-            )
+            error: dict[str, Any] = {"type": "sluice_provider_upstream", "reason": str(exc)}
+            # §7.4: der Status des Providers (503 „überlastet" vs. 400/401 „kaputt"),
+            # damit der Konsument über einen Retry entscheiden kann — der eigene Status
+            # bleibt 502. Additiv: fehlt er, fehlt das Feld (nie geraten, §7.6).
+            if exc.upstream_status is not None:
+                error["upstream_status"] = exc.upstream_status
+            return JSONResponse({"error": error}, status_code=502)
 
     return Starlette(
         routes=[

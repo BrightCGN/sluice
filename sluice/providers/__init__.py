@@ -37,7 +37,17 @@ class ProviderConfigError(RuntimeError):
 
 
 class ProviderError(RuntimeError):
-    """Upstream-Fehler des Providers (Non-2xx, unerwartetes Antwortformat)."""
+    """Upstream-Fehler des Providers (Non-2xx, unerwartetes Antwortformat).
+
+    `upstream_status` ist der HTTP-Status, den der **Provider** gemeldet hat (§7.4) —
+    nicht der des Gateways. `None`, wenn es keinen gibt (Formatfehler, nicht abbildbare
+    Message) oder er unterwegs verloren ging: ein geratener Status wäre eine Behauptung
+    über etwas Ungemessenes (§7.6).
+    """
+
+    def __init__(self, message: str, *, upstream_status: int | None = None) -> None:
+        super().__init__(message)
+        self.upstream_status = upstream_status
 
 
 @dataclass(frozen=True)

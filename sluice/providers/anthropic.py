@@ -142,7 +142,10 @@ class AnthropicAdapter:
                 json=self._body(messages, model=model, max_tokens=max_tokens, tools=tools),
             )
             if resp.status_code != 200:
-                raise ProviderError(f"anthropic: HTTP {resp.status_code}: {resp.text[:500]}")
+                raise ProviderError(
+                    f"anthropic: HTTP {resp.status_code}: {resp.text[:500]}",
+                    upstream_status=resp.status_code,
+                )
             data = resp.json()
             text = "".join(
                 block.get("text", "")
@@ -199,7 +202,10 @@ class AnthropicAdapter:
             ) as resp:
                 if resp.status_code != 200:
                     detail = (await resp.aread()).decode(errors="replace")[:500]
-                    raise ProviderError(f"anthropic: HTTP {resp.status_code}: {detail}")
+                    raise ProviderError(
+                        f"anthropic: HTTP {resp.status_code}: {detail}",
+                        upstream_status=resp.status_code,
+                    )
                 if telemetry is not None:
                     telemetry.rate_limit = rate_limit_from_headers(
                         resp.headers, prefix="anthropic"

@@ -72,8 +72,14 @@ def create_gateway_app(
     )
     log.info("gateway.start", provider=name, token_required=expected_token is not None)
 
-    def _error(status: int, error_type: str, reason: str) -> JSONResponse:
-        return JSONResponse({"error": {"type": error_type, "reason": reason}}, status_code=status)
+    def _error(
+        status: int, error_type: str, reason: str, *, upstream_status: int | None = None
+    ) -> JSONResponse:
+        error: dict[str, Any] = {"type": error_type, "reason": reason}
+        # §7.4: additiv, nur wenn der Provider tatsächlich einen Status gemeldet hat.
+        if upstream_status is not None:
+            error["upstream_status"] = upstream_status
+        return JSONResponse({"error": error}, status_code=status)
 
     async def health(_: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "provider": name})
@@ -169,8 +175,16 @@ def create_gateway_app(
             # Hier entsteht der Provider-Fehlertext (Status + Body, im Adapter gekürzt) —
             # ohne diese Zeile stünde er nur in der Antwort an den Kern, nicht im Journal
             # des Gateways. Der Payload ist zu diesem Zeitpunkt bereits sanitisiert (§1).
-            log.warning("gateway.provider_upstream", provider=name, model=model, reason=str(exc))
-            return _error(502, "gateway_upstream", str(exc))
+            log.warning(
+                "gateway.provider_upstream",
+                provider=name,
+                model=model,
+                upstream_status=exc.upstream_status,
+                reason=str(exc),
+            )
+            return _error(
+                502, "gateway_upstream", str(exc), upstream_status=exc.upstream_status
+            )
 
     return Starlette(
         routes=[

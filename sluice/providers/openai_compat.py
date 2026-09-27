@@ -91,7 +91,10 @@ class OpenAICompatAdapter:
                 json=body,
             )
             if resp.status_code != 200:
-                raise ProviderError(f"{self.name}: HTTP {resp.status_code}: {resp.text[:500]}")
+                raise ProviderError(
+                    f"{self.name}: HTTP {resp.status_code}: {resp.text[:500]}",
+                    upstream_status=resp.status_code,
+                )
             data = resp.json()
             choices = data.get("choices") or []
             if not choices:
@@ -152,7 +155,10 @@ class OpenAICompatAdapter:
             ) as resp:
                 if resp.status_code != 200:
                     detail = (await resp.aread()).decode(errors="replace")[:500]
-                    raise ProviderError(f"{self.name}: HTTP {resp.status_code}: {detail}")
+                    raise ProviderError(
+                        f"{self.name}: HTTP {resp.status_code}: {detail}",
+                        upstream_status=resp.status_code,
+                    )
                 if telemetry is not None:
                     telemetry.rate_limit = rate_limit_from_headers(resp.headers, prefix="x")
                 async for line in resp.aiter_lines():
