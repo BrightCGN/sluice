@@ -74,7 +74,12 @@ allowed_purposes    = ["playlist_curation"]
 # Trainingsdaten und Geschmack, die Vorauswahl wird davon kaum breiter. Jeder
 # Eintrag braucht ein laufendes Gateway (sluice-gateway@<provider>) mit gueltigem
 # Key; ein Provider, der hier fehlt, wird fail-closed abgewiesen.
-provider_allowlist  = ["anthropic", "gemini", "openai", "mistral"]
+# "llamacpp" ist NICHT Teil der Rotation (die bleibt bei den vier Haeusern) —
+# Crate schickt nur die Absichts-Extraktion dorthin ([intent] provider): eine
+# kleine JSON-Aufgabe, fuer die ein Modell im eigenen Netz genuegt und keine
+# externen Tokens kostet. Es braucht deshalb nur diesen Allowlist-Eintrag und
+# KEINEN rotation.models-Block.
+provider_allowlist  = ["anthropic", "gemini", "openai", "mistral", "llamacpp"]
 detector_profile    = ["media", "pii_de"]   # Vereinigungsmenge (Rev. 13, §5.1)
 # ACHTUNG: Die Listen-Schreibweise braucht Sluice-Code ab Spec-Rev. 13. Auf einer
 # älteren Installation landet die Liste ungeprüft im Profil und das Profil crasht

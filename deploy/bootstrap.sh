@@ -31,7 +31,11 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Gateways, die auf DIESER Maschine laufen sollen. Beim Umzug eines Gateways auf
 # einen eigenen Server dort nur den einen Provider setzen:
 #   SLUICE_PROVIDERS="anthropic" bash deploy/bootstrap.sh
-PROVIDERS="${SLUICE_PROVIDERS:-anthropic openai gemini mistral}"
+# `llamacpp` ist der lokale llama-server (§7.3) — kein Egress, aber derselbe Weg,
+# damit es EINEN Pfad zum Modell gibt. Er steht im Default, weil die Vorlage
+# mitgeliefert wird und das Skript ohnehin keine Dienste startet: ohne Key bleibt
+# das Gateway fail-closed. Nicht gebraucht? Dann aus SLUICE_PROVIDERS weglassen.
+PROVIDERS="${SLUICE_PROVIDERS:-anthropic openai gemini mistral llamacpp}"
 
 # Bind-Adresse des Kerns. DEFAULT_HOST ist ein PLATZHALTER aus dem Dokumentationsbereich
 # RFC 5737 — er steht so in den Repo-Dateien (Unit, *.env.example) und dient nur als

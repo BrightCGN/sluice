@@ -168,6 +168,7 @@ def select_provider(
     """Registry-Auswahl per Provider-Name (§7.3). Unbekannter Name ⇒ fail-closed."""
     from sluice.providers.anthropic import AnthropicAdapter
     from sluice.providers.gemini import GeminiAdapter
+    from sluice.providers.llamacpp import LlamaCppAdapter
     from sluice.providers.mistral import MistralAdapter
     from sluice.providers.openai import OpenAIAdapter
 
@@ -177,6 +178,10 @@ def select_provider(
         "openai": OpenAIAdapter,
         "gemini": GeminiAdapter,
         "mistral": MistralAdapter,
+        # Lokaler llama-server. Ein Modell im eigenen Netz ist kein Egress — es
+        # laeuft trotzdem hier durch, damit es EINEN Weg zum Modell gibt (ein
+        # Audit, eine Fehlerbehandlung, eine Key-Isolation).
+        "llamacpp": LlamaCppAdapter,
     }
     adapter_cls = registry.get(name)
     if adapter_cls is None:
@@ -223,14 +228,14 @@ __all__ = [
     "PROVIDER_TIMEOUT",
     "TOOL_CAPABLE_PROVIDERS",
     "ProviderAdapter",
-    "RateLimit",
-    "StreamTelemetry",
-    "Usage",
-    "canonical_provider",
     "ProviderConfigError",
     "ProviderError",
     "ProviderResponse",
+    "RateLimit",
+    "StreamTelemetry",
     "ToolCall",
+    "Usage",
+    "canonical_provider",
     "require_api_key",
     "select_egress_adapter",
     "select_provider",

@@ -361,3 +361,65 @@ async def test_remote_gateway_without_status_field_reports_none(response) -> Non
     with pytest.raises(ProviderError) as info:
         await adapter.complete(MESSAGES, model="m")
     assert info.value.upstream_status is None
+
+
+# --- Lokaler llama-server (§7.3) --------------------------------------------
+#
+# Ein Modell im eigenen Netz ist kein Egress — es laeuft trotzdem durch Sluice,
+# damit es EINEN Weg zum Modell gibt. Die beiden Abweichungen von den
+# Cloud-Adaptern sind Absicht und werden hier festgehalten.
+
+
+def test_llamacpp_without_a_base_url_is_fail_closed(monkeypatch):
+    """Kein geratener Default: `localhost` waere die Gateway-VM, nicht das Modell.
+
+    Ein solcher Default haette auf die falsche Maschine gezeigt, und der Fehler
+    saehe wie ein Netzproblem aus.
+    """
+    monkeypatch.delenv("SLUICE_LLAMACPP_BASE_URL", raising=False)
+    with pytest.raises(ProviderConfigError, match="SLUICE_LLAMACPP_BASE_URL"):
+        select_provider("llamacpp")
+
+
+def test_llamacpp_takes_its_base_url_from_the_env(monkeypatch):
+    monkeypatch.setenv("SLUICE_LLAMACPP_BASE_URL", "http://192.0.2.50:8080/v1/")
+    adapter = select_provider("llamacpp")
+    assert adapter._base_url == "http://192.0.2.50:8080/v1"      # ohne Schraegstrich
+
+
+def test_llamacpp_demands_a_key(monkeypatch):
+    """`llama-server --api-key …` ist der Normalfall und wird erzwungen.
+
+    Ein offener Inferenz-Endpunkt im LAN ist einer, auf dem jeder Gast Modelle
+    laufen laesst — stillschweigend ohne Key zu senden waere die Bequemlichkeit,
+    die man erst bemerkt, wenn sie ausgenutzt wird.
+    """
+    monkeypatch.setenv("SLUICE_LLAMACPP_BASE_URL", "http://192.0.2.50:8080/v1")
+    monkeypatch.delenv("SLUICE_LLAMACPP_API_KEY", raising=False)
+    monkeypatch.delenv("SLUICE_LLAMACPP_ALLOW_NO_AUTH", raising=False)
+    adapter = select_provider("llamacpp")
+    with pytest.raises(ProviderConfigError, match="ALLOW_NO_AUTH"):
+        adapter._headers()
+
+
+def test_llamacpp_runs_without_a_key_only_after_an_explicit_opt_in(monkeypatch):
+    monkeypatch.setenv("SLUICE_LLAMACPP_BASE_URL", "http://192.0.2.50:8080/v1")
+    monkeypatch.delenv("SLUICE_LLAMACPP_API_KEY", raising=False)
+    monkeypatch.setenv("SLUICE_LLAMACPP_ALLOW_NO_AUTH", "1")
+    assert select_provider("llamacpp")._headers() == {}
+
+
+def test_llamacpp_sends_a_bearer_header_like_openai(monkeypatch):
+    monkeypatch.setenv("SLUICE_LLAMACPP_BASE_URL", "http://192.0.2.50:8080/v1")
+    monkeypatch.setenv("SLUICE_LLAMACPP_API_KEY", "geheim")
+    assert select_provider("llamacpp")._headers() == {"Authorization": "Bearer geheim"}
+
+
+def test_llamacpp_is_not_tool_capable():
+    """llama.cpp traegt Tool-Calling je Modell und Chat-Template verschieden.
+
+    Ein Dialekt, der nur manchmal funktioniert, ist schlechter als keiner.
+    """
+    from sluice.providers import TOOL_CAPABLE_PROVIDERS
+
+    assert "llamacpp" not in TOOL_CAPABLE_PROVIDERS

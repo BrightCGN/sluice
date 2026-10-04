@@ -69,13 +69,13 @@ nie**: eine ausgefüllte `profiles.toml` oder eine Gateway-Env mit eingetragenem
 bleibt unangetastet.
 
 ```bash
-sudo bash deploy/bootstrap.sh                      # Kern + alle vier Gateways
+sudo bash deploy/bootstrap.sh                      # Kern + alle Gateways
 sudo SLUICE_WITH_NER=1 bash deploy/bootstrap.sh    # zusätzlich der NER-Dienst (§5.2)
 ```
 
 | Variable | Default | Wirkung |
 |---|---|---|
-| `SLUICE_PROVIDERS` | `anthropic openai gemini mistral` | Welche Gateways auf **dieser** Maschine laufen — beim Umzug eines Gateways dort nur den einen Provider setzen |
+| `SLUICE_PROVIDERS` | `anthropic openai gemini mistral llamacpp` | Welche Gateways auf **dieser** Maschine laufen — beim Umzug eines Gateways dort nur den einen Provider setzen. `llamacpp` ist der lokale `llama-server` (§7.3); nicht gebraucht? Weglassen |
 | `SLUICE_BIND_HOST` | *keiner* — **Pflicht** | Bind-Adresse des Kerns; passt die *installierten* Units/Envs an, die Repo-Dateien bleiben unberührt. Ohne diese Variable bricht das Skript ab: im Repo steht nur der Platzhalter `192.0.2.10` (RFC 5737), der nirgends erreichbar ist |
 | `SLUICE_WITH_NER` | `0` (aus) | Legt User `sluice-ner`, `models/`, `ner.env` und `sluice-ner.service` an und installiert das Modell-Extra |
 | `SLUICE_NER_EXTRA` | `ner` (torch) | Alternativ `ner-onnx` / `ner-onnx-gpu` — **erst nach der Messung** wählen (§5.2) |
@@ -262,6 +262,7 @@ SLUICE_GATEWAY_ANTHROPIC_URL=http://${SLUICE_HOST}:17890
 SLUICE_GATEWAY_OPENAI_URL=http://${SLUICE_HOST}:17891
 SLUICE_GATEWAY_GEMINI_URL=http://${SLUICE_HOST}:17892
 SLUICE_GATEWAY_MISTRAL_URL=http://${SLUICE_HOST}:17893
+SLUICE_GATEWAY_LLAMACPP_URL=http://${SLUICE_HOST}:17894
 # optional, muss dann auch in jeder gateway-<provider>.env stehen:
 # SLUICE_GATEWAY_TOKEN=…
 # Audit-Detailgrad (Rev. 9, §6) — Betreiber-Entscheidung: off | metadata | full.
@@ -372,7 +373,8 @@ Konsumenten ──:8000──▶ sluice.service (Kern: Gate → Modus → Verifi
                           ├──:17890──▶ sluice-gateway@anthropic ──▶ api.anthropic.com
                           ├──:17891──▶ sluice-gateway@openai    ──▶ api.openai.com
                           ├──:17892──▶ sluice-gateway@gemini    ──▶ generativelanguage…
-                          └──:17893──▶ sluice-gateway@mistral   ──▶ api.mistral.ai
+                          ├──:17893──▶ sluice-gateway@mistral   ──▶ api.mistral.ai
+                          └──:17894──▶ sluice-gateway@llamacpp  ──▶ llama-server (LAN)
 ```
 
 | Instanz | Port | User (Rev. 8) | Env-Datei | Key darin |
@@ -381,6 +383,7 @@ Konsumenten ──:8000──▶ sluice.service (Kern: Gate → Modus → Verifi
 | `sluice-gateway@openai` | 17891 | `sluice-gw-openai` | `/etc/sluice/gateway-openai.env` | `SLUICE_OPENAI_API_KEY` |
 | `sluice-gateway@gemini` | 17892 | `sluice-gw-gemini` | `/etc/sluice/gateway-gemini.env` | `SLUICE_GEMINI_API_KEY` |
 | `sluice-gateway@mistral` | 17893 | `sluice-gw-mistral` | `/etc/sluice/gateway-mistral.env` | `SLUICE_MISTRAL_API_KEY` |
+| `sluice-gateway@llamacpp` | 17894 | `sluice-gw-llamacpp` | `/etc/sluice/gateway-llamacpp.env` | `SLUICE_LLAMACPP_API_KEY` **+ `SLUICE_LLAMACPP_BASE_URL`** (Pflicht, kein Default) |
 
 Eigenschaften:
 
@@ -421,6 +424,7 @@ SLUICE_GATEWAY_ANTHROPIC_URL=http://${SLUICE_HOST}:17890
 SLUICE_GATEWAY_OPENAI_URL=http://${SLUICE_HOST}:17891
 SLUICE_GATEWAY_GEMINI_URL=http://${SLUICE_HOST}:17892
 SLUICE_GATEWAY_MISTRAL_URL=http://${SLUICE_HOST}:17893
+SLUICE_GATEWAY_LLAMACPP_URL=http://${SLUICE_HOST}:17894
 ```
 
 Danach `sudo systemctl restart sluice`. Prüfen:

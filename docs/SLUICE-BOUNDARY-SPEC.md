@@ -1015,8 +1015,23 @@ Sluice spricht die Provider direkt an. Ein Adapter pro Provider hinter demselben
 Verifier/Gate; neuer Provider = ein weiterer Adapter, ohne Guard/Verifier/Audit anzufassen.
 Die Allowlist (§4.1) begrenzt pro Profil, welche erlaubt sind.
 
-- **v1-Adapter:** `anthropic` (Claude), `openai`, `gemini`, `mistral`. OpenAI und Mistral
-  teilen den Chat-Completions-Dialekt (gemeinsame Basis-Klasse).
+- **v1-Adapter:** `anthropic` (Claude), `openai`, `gemini`, `mistral`, `llamacpp`. OpenAI,
+  Mistral und llamacpp teilen den Chat-Completions-Dialekt (gemeinsame Basis-Klasse).
+- **`llamacpp` ist ein lokaler `llama-server`** — und läuft trotzdem durch die Boundary.
+  Ein Modell im eigenen Netz ist kein Egress; der Grund ist ein anderer: Konsumenten
+  sollen **einen** Weg zum Modell kennen, mit einem Audit, einer Fehlerbehandlung und
+  einer Key-Isolation. Ein zweiter, direkter Pfad „nur für lokal" wäre später von einem
+  echten Egress nicht mehr zu unterscheiden. Zwei bewusste Abweichungen:
+  - **Keine Default-Basis-URL** (`SLUICE_LLAMACPP_BASE_URL` ist Pflicht, sonst
+    fail-closed). Für `api.openai.com` gibt es eine kanonische Adresse, für „der
+    llama-server im Heimnetz" nicht — und ein geratenes `localhost:8080` zeigte auf die
+    *Gateway*-VM statt auf die Modell-Maschine, was wie ein Netzproblem aussieht.
+  - **Key erzwungen, Opt-out ausdrücklich** (`SLUICE_LLAMACPP_ALLOW_NO_AUTH=1`).
+    `llama-server --api-key …` ist der Normalfall; ein offener Inferenz-Endpunkt im LAN
+    ist einer, auf dem jeder Gast Modelle laufen lässt.
+  - **Kein Tool-Calling** (`TOOL_CAPABLE_PROVIDERS` kennt ihn nicht): llama.cpp trägt es
+    je Modell und Chat-Template verschieden, und ein Dialekt, der nur manchmal
+    funktioniert, ist schlechter als keiner.
 - **Reihenfolge zwingend:** Der Adapter wird ausschließlich vom Dispatch aufgerufen, *nachdem*
   der gewählte Modus gelaufen ist und der Guard released hat — der Adapter ist die *letzte*
   Schicht der Kette, **nie ein Bypass** daran vorbei (§2). Bei sanitisierenden Modi heißt das
@@ -1059,7 +1074,8 @@ Die Allowlist (§4.1) begrenzt pro Profil, welche erlaubt sind.
   erlaubten und vom Konsumenten gewählten Provider.
 - **Eigenständige Gateway-Services (Revision 6):** jedes Provider-Gateway ist ein
   **eigener Service** (`sluice/gateway.py`, systemd-Template `deploy/sluice-gateway@.service`,
-  Ports ab **17890**: anthropic 17890, openai 17891, gemini 17892, mistral 17893) mit eigenem
+  Ports ab **17890**: anthropic 17890, openai 17891, gemini 17892, mistral 17893,
+  llamacpp 17894) mit eigenem
   Lebenszyklus — Kern und Gateways können jederzeit auf **getrennte Server** umziehen; der
   Kern kennt ein Gateway nur über `SLUICE_GATEWAY_<PROVIDER>_URL` und braucht dann selbst
   **keinen Provider-Key** (Key-Isolation: jedes Gateway hält nur seinen eigenen).
