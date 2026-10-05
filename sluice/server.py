@@ -66,6 +66,7 @@ from sluice.dialect import (
 )
 from sluice.dispatch import guarded_completion, guarded_stream
 from sluice.guard import guarded_egress
+from sluice.modes import EgressPayload, Scope, is_registered_mode
 from sluice.policy import Profile, load_profiles
 from sluice.providers import (
     ProviderAdapter,
@@ -81,7 +82,6 @@ from sluice.rotation import (
     effective_max_tokens,
     select_rotation,
 )
-from sluice.modes import EgressPayload, Scope, is_registered_mode
 
 log = structlog.get_logger("sluice.server")
 
@@ -239,6 +239,14 @@ def create_app(
         except json.JSONDecodeError:
             return _bad_request("Body ist kein gültiges JSON.")
 
+        raw_tools = body.get("tools") or None
+        tools = None
+        if raw_tools is not None:
+            try:
+                tools = normalize_tools(raw_tools)
+            except DialectError as exc:
+                return _bad_request(str(exc))
+
         profile = resolved.get(body.get("profile", ""))
         outcome = await guarded_egress(
             profile=profile,
@@ -247,6 +255,7 @@ def create_app(
                 raw_text=body.get("raw_text", ""),
                 generalized_text=body.get("generalized_text"),
                 messages=body.get("messages"),
+                tools=tools,
             ),
             scope=Scope(key=body["scope"]) if body.get("scope") else None,
             provider_target=body.get("provider"),

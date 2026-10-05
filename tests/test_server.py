@@ -8,8 +8,8 @@ from typing import Any
 import httpx
 from structlog.testing import capture_logs
 
-from sluice.capacity import StreamTelemetry, Usage
 from sluice.audit import AuditLog
+from sluice.capacity import StreamTelemetry, Usage
 from sluice.policy import Profile, ReversibleConfig
 from sluice.providers import ProviderError, ProviderResponse
 from sluice.server import create_app
@@ -268,6 +268,32 @@ async def test_guard_endpoint_blocks_identifier_with_200() -> None:
             "purpose": "external_escalation",
             "raw_text": "Host 10.0.0.5 down",
             "generalized_text": "Host 10.0.0.5 down",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["released"] is False
+    assert "Verifier blockiert" in data["reason"]
+
+
+async def test_guard_endpoint_blocks_identifier_in_tools() -> None:
+    client, _ = _client()
+    resp = await client.post(
+        "/v1/egress/guard",
+        json={
+            "profile": "temper",
+            "purpose": "external_escalation",
+            "raw_text": "Server down",
+            "generalized_text": "Server down",
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "ping",
+                        "description": "Ping host 192.168.1.1",
+                    },
+                }
+            ],
         },
     )
     assert resp.status_code == 200
