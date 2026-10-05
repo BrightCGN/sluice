@@ -136,6 +136,23 @@ if [[ "${REPO_DIR}" != "${APP_DIR}" ]]; then
     # ihn also bei jedem Deploy aus einem Checkout außerhalb von ${APP_DIR} restlos
     # löschen. Gigabytes, ein erneuter Download hinter der Firewall, und der NER-Dienst
     # kommt bis dahin nicht hoch (fail-closed: pii_ner-Profile blockieren mit 503).
+    # Bytecode-Caches VORHER wegräumen. ``--exclude '__pycache__'`` nimmt sie von
+    # der Löschung aus, und dadurch bleibt ein umbenanntes Paket als leere Hülle
+    # stehen: rsync meldet „cannot delete non-empty directory: sluice/strategies"
+    # und lässt das Verzeichnis liegen, weil nur noch Caches darin sind.
+    #
+    # Beobachtet am 05.10.2026 — fünf Monate nach der Umbenennung strategies →
+    # modes lagen dort noch `strict.cpython-311.pyc` und Co., aus einer Zeit vor
+    # dem Python-3.14-Wechsel. Importierbar ist das nicht (ohne `.py` ignoriert
+    # Python die `.pyc`), aber es führt bei der Fehlersuche in die Irre: man findet
+    # Modulnamen, die es nicht mehr gibt. Genau diese Spur hat uns andererseits
+    # einen verlorenen Adapter verraten — nützlich war sie also auch, nur nicht hier.
+    #
+    # Bewusst NICHT `--delete-excluded`: das würde auch `models` und `.venv`
+    # mitnehmen, also den Modell-Cache (Gigabytes) und die Installation.
+    if [[ -d "${APP_DIR}" ]]; then
+        find "${APP_DIR}" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+    fi
     rsync -a --delete \
         --exclude '.git' --exclude '__pycache__' --exclude '.venv' \
         --exclude '.pytest_cache' --exclude 'models' \
