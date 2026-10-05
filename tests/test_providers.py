@@ -423,3 +423,45 @@ def test_llamacpp_is_not_tool_capable():
     from sluice.providers import TOOL_CAPABLE_PROVIDERS
 
     assert "llamacpp" not in TOOL_CAPABLE_PROVIDERS
+
+
+def test_every_canonical_provider_has_an_adapter(monkeypatch) -> None:
+    """Kern-Liste und Adapter-Zuordnung muessen sich in BEIDEN Richtungen decken.
+
+    Es gibt zwei Stellen: `select_provider` baut den Adapter im Gateway,
+    `select_egress_adapter` prueft im Kern gegen CANONICAL_PROVIDERS. Am
+    05.10.2026 lief das auseinander — llamacpp war in der Registry, nicht in
+    CANONICAL_PROVIDERS. Das Gateway startete tadellos, der Kern wies den Provider
+    mit "kein Adapter registriert" ab: eine Meldung, die auf einen fehlenden
+    Adapter zeigt, obwohl er dalag.
+
+    Der erste Anlauf dieses Tests lief ueber CANONICAL_PROVIDERS und merkte
+    deshalb NICHTS, wenn dort ein Eintrag fehlte — eine Tautologie. Geprueft wird
+    jetzt die Zuordnung _MODULES/_CLASSES gegen die Liste, in beide Richtungen.
+    """
+    from sluice.providers import _CLASSES, _MODULES, CANONICAL_PROVIDERS
+
+    assert set(_MODULES) == set(CANONICAL_PROVIDERS)
+    assert set(_CLASSES) == set(CANONICAL_PROVIDERS)
+
+    monkeypatch.setenv("SLUICE_LLAMACPP_BASE_URL", "http://192.0.2.50:8080/v1")
+    for name in CANONICAL_PROVIDERS:
+        assert select_provider(name).name == name, f"{name}: Adapter fehlt"
+
+
+def test_the_core_accepts_every_canonical_provider(monkeypatch) -> None:
+    """Und der Kern-Pfad nimmt dieselben Namen an (Gateway-URL vorausgesetzt)."""
+    from sluice.providers import CANONICAL_PROVIDERS, select_egress_adapter
+
+    for name in CANONICAL_PROVIDERS:
+        monkeypatch.setenv(f"SLUICE_GATEWAY_{name.upper()}_URL", "http://127.0.0.1:1")
+        select_egress_adapter(name)      # darf nicht werfen
+
+
+def test_an_alias_resolves_to_its_canonical_adapter(monkeypatch) -> None:
+    """„claude" ist ein Alias auf anthropic (§4) — beide Pfade muessen ihn kennen."""
+    from sluice.providers import select_egress_adapter
+
+    assert select_provider("claude").name == "anthropic"
+    monkeypatch.setenv("SLUICE_GATEWAY_ANTHROPIC_URL", "http://127.0.0.1:1")
+    select_egress_adapter("claude")

@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from importlib import import_module
 from typing import Any, Protocol, runtime_checkable
 
 import httpx
@@ -145,7 +146,29 @@ _ALIASES = {"claude": "anthropic"}
 
 # Alle kanonischen Provider — eine Quelle für Registry und Gateway-Auswahl, damit ein
 # neuer Provider nicht an einer der beiden Stellen vergessen werden kann.
-CANONICAL_PROVIDERS = ("anthropic", "openai", "gemini", "mistral")
+CANONICAL_PROVIDERS = ("anthropic", "openai", "gemini", "mistral", "llamacpp")
+
+# Modul- und Klassennamen je kanonischem Provider. Zusammen mit
+# ``CANONICAL_PROVIDERS`` die eine Quelle: fehlt hier ein Eintrag, scheitert
+# ``select_provider`` sofort und sichtbar, statt dass Kern und Gateway
+# auseinanderlaufen (siehe select_provider).
+_MODULES = {
+    "anthropic": "anthropic",
+    "openai": "openai",
+    "gemini": "gemini",
+    "mistral": "mistral",
+    # Lokaler llama-server. Ein Modell im eigenen Netz ist kein Egress — es laeuft
+    # trotzdem hier durch, damit es EINEN Weg zum Modell gibt (ein Audit, eine
+    # Fehlerbehandlung, eine Key-Isolation).
+    "llamacpp": "llamacpp",
+}
+_CLASSES = {
+    "anthropic": "AnthropicAdapter",
+    "openai": "OpenAIAdapter",
+    "gemini": "GeminiAdapter",
+    "mistral": "MistralAdapter",
+    "llamacpp": "LlamaCppAdapter",
+}
 
 # Provider, deren Adapter Tool-Calling tragen (§7.2). Ein Request MIT `tools` an einen
 # Provider, der hier NICHT steht, wird fail-closed abgewiesen — nie still ohne Tools
@@ -165,27 +188,26 @@ def canonical_provider(name: str) -> str:
 def select_provider(
     name: str, *, http_client: httpx.AsyncClient | None = None
 ) -> ProviderAdapter:
-    """Registry-Auswahl per Provider-Name (§7.3). Unbekannter Name ⇒ fail-closed."""
-    from sluice.providers.anthropic import AnthropicAdapter
-    from sluice.providers.gemini import GeminiAdapter
-    from sluice.providers.llamacpp import LlamaCppAdapter
-    from sluice.providers.mistral import MistralAdapter
-    from sluice.providers.openai import OpenAIAdapter
+    """Registry-Auswahl per Provider-Name (§7.3). Unbekannter Name ⇒ fail-closed.
 
-    registry: dict[str, type] = {
-        "anthropic": AnthropicAdapter,
-        "claude": AnthropicAdapter,  # Alias — Profile sprechen historisch von "claude" (§4)
-        "openai": OpenAIAdapter,
-        "gemini": GeminiAdapter,
-        "mistral": MistralAdapter,
-        # Lokaler llama-server. Ein Modell im eigenen Netz ist kein Egress — es
-        # laeuft trotzdem hier durch, damit es EINEN Weg zum Modell gibt (ein
-        # Audit, eine Fehlerbehandlung, eine Key-Isolation).
-        "llamacpp": LlamaCppAdapter,
-    }
-    adapter_cls = registry.get(name)
-    if adapter_cls is None:
-        raise ProviderConfigError(f"Unbekannter Provider '{name}' (§7.3): kein Adapter registriert.")
+    Die Auswahl wird aus ``CANONICAL_PROVIDERS`` **abgeleitet**, nicht daneben
+    gepflegt. Vorher stand hier ein zweites Literal, und genau das ging am
+    05.10.2026 auseinander: ``llamacpp`` war in dieser Registry, aber nicht in
+    ``CANONICAL_PROVIDERS``. Das Gateway startete tadellos, der Kern wies den
+    Provider mit „kein Adapter registriert" ab — eine Meldung, die auf einen
+    fehlenden Adapter zeigt, obwohl er dalag. Der Kommentar über
+    ``CANONICAL_PROVIDERS`` versprach schon damals „eine Quelle für Registry und
+    Gateway-Auswahl"; jetzt löst der Code das Versprechen ein.
+    """
+    canonical = canonical_provider(name)
+    if canonical not in CANONICAL_PROVIDERS:
+        raise ProviderConfigError(
+            f"Unbekannter Provider '{name}' (§7.3): kein Adapter registriert."
+        )
+    # Lazy je Treffer: ein Gateway braucht genau einen Adapter, und ein Import
+    # aller Module kostete bei jedem Aufruf Zeit (und riskierte Zyklen).
+    modul = import_module(f"sluice.providers.{_MODULES[canonical]}")
+    adapter_cls = getattr(modul, _CLASSES[canonical])
     return adapter_cls(http_client=http_client)
 
 
