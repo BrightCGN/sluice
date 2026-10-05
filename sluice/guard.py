@@ -27,13 +27,13 @@ from sluice.audit import AuditLog
 from sluice.audit import egress_log as _default_audit
 from sluice.content import tool_surfaces
 from sluice.errors import ModeUnavailableError
+from sluice.modes import EgressPayload, Mode, Sanitized, Scope, select_mode
 from sluice.policy import (
     Profile,
     check_egress_allowed,
     check_mode_allowed,
     check_provider_allowed,
 )
-from sluice.modes import EgressPayload, Mode, Sanitized, Scope, select_mode
 from sluice.verifier import verify_no_identifiers
 
 log = structlog.get_logger("sluice.guard")
@@ -127,6 +127,7 @@ async def guarded_egress(
     #    keinen Egress-Effekt — es baut/cached nur die Instanz; forward() folgt erst nach
     #    der Allowlist-Prüfung.
     chosen = mode if mode is not None else select_mode(profile)
+    mode_name = chosen.name
 
     # Modus-Allowlist (§4.1) — ein per Profil gesperrter Modus wird fail-closed abgewiesen,
     # auch wenn ein Request ihn wählt. Rev. 11: fail-open-Modi (ohne Verifier, §2.1) brauchen

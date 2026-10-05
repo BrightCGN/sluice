@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from sluice.audit import AuditLog
 from sluice.guard import guarded_egress
-from sluice.policy import Profile, ReversibleConfig
 from sluice.modes import EgressPayload, Scope
+from sluice.policy import Profile, ReversibleConfig
 
 TEMPER = Profile(
     name="temper",
@@ -188,3 +188,21 @@ async def test_audit_streams_isolated_per_profile() -> None:
     )
     assert len(audit.for_profile("temper")) == 1
     assert len(audit.for_profile("crate")) == 0
+
+
+async def test_audit_logs_actual_chosen_mode_on_block() -> None:
+    from sluice.modes.passthrough import PassthroughMode
+
+    audit = AuditLog(level="metadata")
+    # TEMPER hat mode="generalizing" und erlaubt passthrough nicht -> Blockade
+    outcome = await guarded_egress(
+        profile=TEMPER,
+        purpose="promotion_upload",
+        payload=EgressPayload(raw_text="Hello world"),
+        mode=PassthroughMode(),
+        audit=audit,
+    )
+    assert outcome.released is False
+    assert len(audit.entries) == 1
+    assert audit.entries[0].mode == "passthrough"
+
