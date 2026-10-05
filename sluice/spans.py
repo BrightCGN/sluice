@@ -134,7 +134,6 @@ def merge_spans(
         if any(candidate.overlaps(existing) for existing in kept):
             continue
         kept.append(candidate)
-        kept = _resolve_overlaps(sorted(kept, key=_order))
 
     return tuple(sorted(kept, key=_order))
 
