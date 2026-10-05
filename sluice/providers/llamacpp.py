@@ -41,6 +41,8 @@ from sluice.providers.openai_compat import OpenAICompatAdapter
 BASE_URL_ENV = "SLUICE_LLAMACPP_BASE_URL"
 #: Ausdrückliche Erklärung, dass der Endpunkt ohne Key betrieben wird.
 ALLOW_NO_AUTH_ENV = "SLUICE_LLAMACPP_ALLOW_NO_AUTH"
+#: Internes Nachdenken wieder einschalten (Default: aus, siehe Klassen-Docstring).
+THINKING_ENV = "SLUICE_LLAMACPP_ENABLE_THINKING"
 
 
 class LlamaCppAdapter(OpenAICompatAdapter):
@@ -53,6 +55,20 @@ class LlamaCppAdapter(OpenAICompatAdapter):
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
+        # **Nachdenken ist hier standardmäßig AUS**, und das ist kein Geschmack.
+        # Qwen3 und Verwandte sind hybrid; ihre Denk-Tokens zählen gegen dasselbe
+        # ``max_tokens`` wie die Antwort, und llama.cpp meldet sie nicht getrennt.
+        # Gemessen am 05.10.2026 am selben Prompt, 64 Tokens Budget:
+        #
+        #     ohne Flag:  64 Tokens, finish_reason "length", content ""
+        #     mit Flag:    2 Tokens, finish_reason "stop",   content "OK"
+        #
+        # Eine leere Antwort ist die teuerste Fehlerart: der Aufrufer sieht keinen
+        # Fehler, nur nichts. Bei Crates Absichts-Extraktion ist der Pfad fail-soft
+        # — dort verschwindet der Ausfall vollständig. Wer Nachdenken braucht,
+        # schaltet es ausdrücklich ein und hebt das Budget mit.
+        if os.environ.get(THINKING_ENV, "").strip() not in ("1", "true", "yes"):
+            self.extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
         if not self._base_url:
             self._base_url = os.environ.get(BASE_URL_ENV, "").strip().rstrip("/")
         if not self._base_url:

@@ -49,6 +49,14 @@ class OpenAICompatAdapter:
     # nach Modellnamen: eine Namensliste muesste man bei jedem neuen Modell
     # nachpflegen, und trifft sie daneben, scheitert der Aufruf erst beim Provider.
     max_tokens_field: str = "max_tokens"
+    # Zusätzliche Body-Felder, die dieser Dialekt braucht und die KEINE Rolle des
+    # Konsumenten sind. Beispiel: llama.cpp erwartet
+    # ``chat_template_kwargs.enable_thinking = false``, sonst verbrauchen die
+    # Denk-Tokens eines hybriden Modells das ganze Budget und es kommt eine LEERE
+    # Antwort zurück (gemessen 05.10.2026: 64 Tokens, finish_reason "length",
+    # content ""). Ein Konsument wie Crate kennt solche Eigenheiten nicht und soll
+    # sie nicht kennen müssen — das ist der Sinn eines Adapters.
+    extra_body: dict[str, Any] = {}  # noqa: RUF012 - bewusst klassenweit, nie mutiert
 
     def __init__(
         self,
@@ -82,6 +90,7 @@ class OpenAICompatAdapter:
             # einer zweiten, die auseinanderlaufen könnte.
             "messages": to_openai_messages(messages),
         }
+        body.update(self.extra_body)
         if tools:
             body["tools"] = to_openai_tools(tools)
         try:
@@ -147,6 +156,7 @@ class OpenAICompatAdapter:
             "messages": to_openai_messages(messages),
             "stream": True,
         }
+        body.update(self.extra_body)
         if telemetry is not None and self.stream_usage_option:
             body["stream_options"] = {"include_usage": True}
         try:

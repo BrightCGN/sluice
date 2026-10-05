@@ -1032,6 +1032,16 @@ Die Allowlist (§4.1) begrenzt pro Profil, welche erlaubt sind.
   - **Kein Tool-Calling** (`TOOL_CAPABLE_PROVIDERS` kennt ihn nicht): llama.cpp trägt es
     je Modell und Chat-Template verschieden, und ein Dialekt, der nur manchmal
     funktioniert, ist schlechter als keiner.
+  - **Internes Nachdenken ist aus** (`chat_template_kwargs.enable_thinking = false`,
+    zurückschaltbar mit `SLUICE_LLAMACPP_ENABLE_THINKING=1`). Hybride Modelle
+    (Qwen3) rechnen ihre Denk-Tokens gegen dasselbe `max_tokens` wie die Antwort,
+    und llama.cpp meldet sie nicht getrennt. Gemessen am 05.10.2026, 64 Tokens
+    Budget: ohne Flag 64 Tokens / `length` / **leerer** Inhalt, mit Flag 2 Tokens /
+    `stop` / „OK". Eine leere Antwort ist die teuerste Fehlerart — der Konsument
+    sieht keinen Fehler, nur nichts; bei einem fail-soft Pfad verschwindet sie
+    ganz. Der Adapter trägt das, weil es Dialekt-Wissen ist: ein Konsument soll
+    solche Eigenheiten nicht kennen müssen (dafür `extra_body` in
+    `OpenAICompatAdapter`).
 - **Reihenfolge zwingend:** Der Adapter wird ausschließlich vom Dispatch aufgerufen, *nachdem*
   der gewählte Modus gelaufen ist und der Guard released hat — der Adapter ist die *letzte*
   Schicht der Kette, **nie ein Bypass** daran vorbei (§2). Bei sanitisierenden Modi heißt das

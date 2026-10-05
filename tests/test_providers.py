@@ -465,3 +465,61 @@ def test_an_alias_resolves_to_its_canonical_adapter(monkeypatch) -> None:
     assert select_provider("claude").name == "anthropic"
     monkeypatch.setenv("SLUICE_GATEWAY_ANTHROPIC_URL", "http://127.0.0.1:1")
     select_egress_adapter("claude")
+
+
+def test_llamacpp_disables_thinking_by_default(monkeypatch) -> None:
+    """Hybride Modelle verbrauchen sonst das Budget mit Denken und antworten LEER.
+
+    Gemessen am 05.10.2026 gegen llama.cpp, derselbe Prompt, 64 Tokens Budget:
+    ohne Flag 64 Tokens / finish_reason "length" / content "", mit Flag 2 Tokens /
+    "stop" / "OK". Eine leere Antwort ist die teuerste Fehlerart — der Aufrufer
+    sieht keinen Fehler, nur nichts; bei Crates fail-soft Absichts-Extraktion
+    verschwindet der Ausfall vollstaendig.
+    """
+    monkeypatch.setenv("SLUICE_LLAMACPP_BASE_URL", "http://192.0.2.50:8080/v1")
+    monkeypatch.setenv("SLUICE_LLAMACPP_API_KEY", "geheim")
+    monkeypatch.delenv("SLUICE_LLAMACPP_ENABLE_THINKING", raising=False)
+    adapter = select_provider("llamacpp")
+    assert adapter.extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+def test_llamacpp_thinking_can_be_switched_back_on(monkeypatch) -> None:
+    monkeypatch.setenv("SLUICE_LLAMACPP_BASE_URL", "http://192.0.2.50:8080/v1")
+    monkeypatch.setenv("SLUICE_LLAMACPP_ENABLE_THINKING", "1")
+    assert select_provider("llamacpp").extra_body == {}
+
+
+async def test_extra_body_reaches_the_request(monkeypatch) -> None:
+    """Der Schalter muss im gesendeten Body landen — sonst ist er Dekoration."""
+    gesehen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        gesehen.update(json.loads(request.content))
+        return httpx.Response(200, json={
+            "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        })
+
+    monkeypatch.setenv("SLUICE_LLAMACPP_BASE_URL", "http://192.0.2.50:8080/v1")
+    monkeypatch.setenv("SLUICE_LLAMACPP_API_KEY", "geheim")
+    monkeypatch.delenv("SLUICE_LLAMACPP_ENABLE_THINKING", raising=False)
+    adapter = select_provider("llamacpp", http_client=_client(handler))
+
+    await adapter.complete(MESSAGES, model="Qwen", max_tokens=32)
+
+    assert gesehen["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_the_other_compat_adapters_send_no_extra_body() -> None:
+    """Der Schalter ist provider-spezifisch — niemand sonst darf ihn mitschicken.
+
+    Geprueft wird die OpenAI-Dialekt-Familie, denn nur sie teilt ``extra_body``.
+    ``anthropic`` und ``gemini`` bauen ihren Body vollstaendig selbst und koennen
+    ihn gar nicht mitschicken — mein erster Anlauf pruefte sie mit und scheiterte
+    an einem AttributeError, also an der eigenen falschen Annahme.
+    """
+    for name in ("openai", "mistral"):
+        assert select_provider(name).extra_body == {}
+
+    for name in ("anthropic", "gemini"):
+        assert not hasattr(select_provider(name), "extra_body")
