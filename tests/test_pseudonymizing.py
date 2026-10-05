@@ -78,7 +78,7 @@ async def test_reverse_obj_recurses_tool_args() -> None:
     s = _mode([])
     scope = Scope("test")
     fwd = (await s.forward(EgressPayload(raw_text="mail an max.mustermann@example.com"), scope)).text
-    token = [w for w in fwd.split() if w.startswith("⟦")][0]
+    token = next(w for w in fwd.split() if w.startswith("⟦"))
     args = {"to": token, "nested": {"cc": [token]}, "n": 3}
     real = await s.reverse_obj(args, scope)
     assert real["to"] == "max.mustermann@example.com"  # echte Werte bei der (gemockten) Ausführung

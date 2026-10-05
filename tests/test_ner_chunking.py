@@ -21,6 +21,7 @@ dabei genauso wie das echte Modell.
 
 from __future__ import annotations
 
+import itertools
 import json
 import warnings
 from typing import Any
@@ -165,7 +166,7 @@ def test_stuecke_ueberlappen() -> None:
     """Ohne Überlappung würde eine Entität an der Schnittstelle in beiden Stücken verfehlt."""
     stuecke = split_chunks(TEXT, 700, 200)
     assert len(stuecke) > 1
-    for (offset_a, stueck_a), (offset_b, _) in zip(stuecke, stuecke[1:]):
+    for (offset_a, stueck_a), (offset_b, _) in itertools.pairwise(stuecke):
         assert offset_b < offset_a + len(stueck_a), "Stücke stoßen ohne Überlappung aneinander"
 
 

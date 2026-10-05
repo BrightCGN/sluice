@@ -5,13 +5,13 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
-from sluice.capacity import StreamTelemetry, Usage
 from sluice.audit import AuditLog
+from sluice.capacity import StreamTelemetry, Usage
 from sluice.dispatch import guarded_completion, guarded_stream
-from sluice.policy import Profile, ReversibleConfig
-from sluice.providers import ProviderResponse
 from sluice.modes import EgressPayload, Scope
 from sluice.modes.pseudonymizing import PseudonymizingMode
+from sluice.policy import Profile, ReversibleConfig
+from sluice.providers import ProviderResponse
 
 TEMPER = Profile(
     name="temper",

@@ -1,7 +1,10 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
-.venv/
+# OHNE Schraegstrich: .venv ist hier ein SYMLINK auf ein venv ausserhalb des
+# Checkouts, und ".venv/" trifft nur Verzeichnisse — der Link blieb dadurch
+# unversioniert sichtbar und wanderte bei `git add -A` in den Index.
+.venv
 venv/
 dist/
 build/

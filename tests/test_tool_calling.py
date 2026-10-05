@@ -439,8 +439,8 @@ async def test_pseudonymizing_reverses_tool_call_arguments() -> None:
     # Das Modell arbeitet auf Pseudonymen und gibt sie in den Argumenten zurück; der
     # Konsument braucht dort den ECHTEN Wert (§7.2/§8). Ohne dieses Reversal liefe sein
     # Tool auf einem Platzhalter, während der Antworttext schon zurückgemappt ist.
-    from sluice.modes.pseudonymizing import PseudonymizingMode
     from sluice.modes import Scope
+    from sluice.modes.pseudonymizing import PseudonymizingMode
 
     mode = PseudonymizingMode()
     scope = Scope(key="s1")

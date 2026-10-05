@@ -297,7 +297,7 @@ async def test_auto_rotates_and_the_response_names_the_model_that_answered():
             "/v1/chat/completions", json={**BODY, "model": "auto"}, headers=HEADERS
         )
     assert resp.status_code == 200
-    called_model, called_budget = adapter.calls[0]
+    called_model, _called_budget = adapter.calls[0]
     assert called_model in {"claude-opus-5", "gemini-2.5-pro", "gpt-5"}
     # §12.1: die Antwort trägt, WAS geantwortet hat — nicht „auto", nicht das
     # Angefragte. Ohne das kann ein Konsument seine Bewertung je Modell nicht führen.

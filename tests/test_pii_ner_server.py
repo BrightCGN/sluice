@@ -14,7 +14,6 @@ import httpx
 import pytest
 
 from sluice.audit import AuditLog
-from sluice.modes import pii_ner as pii_ner_module
 from sluice.modes import register_mode
 from sluice.modes.pii_ner import PiiNerMode
 from sluice.ner import NerConfig
@@ -83,7 +82,7 @@ def use_mocked_ner() -> Iterator[Any]:
             client=NerClient(config, http_client=httpx.AsyncClient(transport=transport)),
         )
 
-    from sluice.modes import _instances, _MODE_FACTORIES
+    from sluice.modes import _MODE_FACTORIES, _instances
 
     original = _MODE_FACTORIES.get("pii_ner")
     register_mode("pii_ner", factory)

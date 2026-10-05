@@ -41,11 +41,11 @@ class DetectorProfile:
     deny: tuple[DenyPattern, ...] = field(default_factory=tuple)
 
 
-from sluice.detectors.code import PROFILE as _CODE  # noqa: E402
-from sluice.detectors.financial import PROFILE as _FINANCIAL  # noqa: E402
-from sluice.detectors.infra import PROFILE as _INFRA  # noqa: E402
-from sluice.detectors.media import PROFILE as _MEDIA  # noqa: E402
-from sluice.detectors.pii_de import PROFILE as _PII_DE  # noqa: E402
+from sluice.detectors.code import PROFILE as _CODE
+from sluice.detectors.financial import PROFILE as _FINANCIAL
+from sluice.detectors.infra import PROFILE as _INFRA
+from sluice.detectors.media import PROFILE as _MEDIA
+from sluice.detectors.pii_de import PROFILE as _PII_DE
 
 _PROFILES: dict[str, DetectorProfile] = {
     _INFRA.name: _INFRA,

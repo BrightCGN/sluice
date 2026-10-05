@@ -7,6 +7,13 @@ from __future__ import annotations
 
 from sluice.audit import AuditLog, EgressLogEntry, egress_log
 from sluice.guard import EgressOutcome, guarded_egress
+from sluice.modes import (
+    EgressPayload,
+    Mode,
+    Sanitized,
+    Scope,
+    select_mode,
+)
 from sluice.policy import (
     EgressDecision,
     Profile,
@@ -15,13 +22,6 @@ from sluice.policy import (
     check_provider_allowed,
     load_profiles,
     parse_profiles,
-)
-from sluice.modes import (
-    EgressPayload,
-    Mode,
-    Sanitized,
-    Scope,
-    select_mode,
 )
 from sluice.verifier import VerificationResult, verify_no_identifiers
 

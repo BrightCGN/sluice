@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from sluice.audit import AuditLog
 from sluice.guard import guarded_egress
-from sluice.policy import Profile, parse_profiles
 from sluice.modes import EgressPayload
+from sluice.policy import Profile, parse_profiles
 from sluice.verifier import redact_identifiers, verify_no_identifiers
 
 TERMS = ("Mustermann", "Musterstraße 12")

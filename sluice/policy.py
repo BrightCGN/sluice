@@ -22,7 +22,7 @@ TOML-Profil-Schema aus Spec §4.
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -75,14 +75,14 @@ class Profile:
     # Rotationsmenge (§4.5, Rev. 16). Leer = keine Rotation; `model: "auto"` ⇒ 403.
     # Jeder Eintrag steht per Ladeprüfung in `provider_allowlist` — die Auswahlmenge
     # kann die Allowlist konstruktionsbedingt nicht verlassen (§4.1).
-    rotation: RotationConfig = RotationConfig()
+    rotation: RotationConfig = field(default_factory=RotationConfig)
 
     @property
     def strategy(self) -> str:
         """Rückwärtskompatibler Lese-Alias auf `mode` (Rev. 9)."""
         return self.mode
 
-    def anonymization_identity(self) -> "AnonymizationIdentity":
+    def anonymization_identity(self) -> AnonymizationIdentity:
         """Die profilverankerte Anonymisierungs-Identität (§5.4, Rev. 12).
 
         Verankert an derselben Stelle wie der Modus-Schalter selbst: das Profil
@@ -252,7 +252,7 @@ def _parse_rotation(
     if block is None:
         return RotationConfig()
     if not isinstance(block, dict):
-        raise ValueError(
+        raise ValueError(  # noqa: TRY004
             f"Profil '{profile_name}': rotation muss eine Tabelle sein, ist "
             f"{type(block).__name__} (§4.5)."
         )
@@ -277,7 +277,7 @@ def _parse_rotation(
     seen: set[tuple[str, str]] = set()
     for index, item in enumerate(declared):
         if not isinstance(item, dict):
-            raise ValueError(
+            raise ValueError(  # noqa: TRY004
                 f"Profil '{profile_name}': rotation.models[{index}] muss eine Tabelle sein."
             )
         provider = str(item.get("provider", "")).strip()
@@ -348,7 +348,7 @@ def _parse_detector_profile(profile_name: str, raw: dict) -> str:
             )
         names = list(declared)
     else:
-        raise ValueError(
+        raise ValueError(  # noqa: TRY004
             f"Profil '{profile_name}': detector_profile muss ein Name oder eine Liste von "
             f"Namen sein, ist {type(declared).__name__}."
         )

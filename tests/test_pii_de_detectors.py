@@ -18,7 +18,6 @@ from sluice.detectors.pii_de import (
 )
 from sluice.spans import detect_regex_spans
 
-
 # ---------- Prüfziffernverfahren (§5.3) ----------
 
 

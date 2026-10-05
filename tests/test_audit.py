@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from sluice.audit import AuditLog
 
-_KW = dict(
-    profile="p",
-    purpose="x",
-    mode="strict",
-    released=True,
-    reason="clean",
-    before="192.0.2.1 roh",
-    after="[IP] roh",
-    provider_target="claude",
-)
+_KW = {
+    "profile": "p",
+    "purpose": "x",
+    "mode": "strict",
+    "released": True,
+    "reason": "clean",
+    "before": "192.0.2.1 roh",
+    "after": "[IP] roh",
+    "provider_target": "claude",
+}
 
 
 def test_default_level_is_metadata() -> None:

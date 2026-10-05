@@ -13,16 +13,16 @@ from typing import Any
 
 import httpx
 
+from sluice.capacity import (
+    StreamTelemetry,
+    rate_limit_from_headers,
+    usage_from_payload,
+)
 from sluice.dialect import (
     DialectError,
     normalize_tool_calls,
     to_openai_messages,
     to_openai_tools,
-)
-from sluice.capacity import (
-    StreamTelemetry,
-    rate_limit_from_headers,
-    usage_from_payload,
 )
 from sluice.providers import (
     PROVIDER_TIMEOUT,

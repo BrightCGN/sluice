@@ -23,7 +23,6 @@ import pytest
 
 from sluice.ner.engine import precision_from_onnx_file, verify_onnx_precision
 
-
 # ---- Ableitung aus dem Exportnamen ---------------------------------------------------
 
 

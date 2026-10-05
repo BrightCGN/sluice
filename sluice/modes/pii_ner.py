@@ -27,10 +27,10 @@ from __future__ import annotations
 import httpx
 
 from sluice.identity import AnonymizationIdentity, build_identity
+from sluice.modes.pii_regex import PiiRegexMode
 from sluice.ner import NerConfig, placeholder_for
 from sluice.ner.client import NerClient
 from sluice.spans import SOURCE_NER, Span, detect_regex_spans, merge_spans
-from sluice.modes.pii_regex import PiiRegexMode
 
 
 class PiiNerMode(PiiRegexMode):

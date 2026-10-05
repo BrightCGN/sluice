@@ -24,7 +24,7 @@ Drei Regeln, die dieses Modul trägt:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -48,7 +48,7 @@ class Usage:
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
 
-    def merged_with(self, other: "Usage") -> "Usage":
+    def merged_with(self, other: Usage) -> Usage:
         return Usage(
             input_tokens=self.input_tokens + other.input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
@@ -239,7 +239,7 @@ def parse_reset(value: str | None) -> float | None:
         return sum(float(amount) * _UNIT_SECONDS[unit] for amount, unit in matches)
     # ISO-8601-Zeitpunkt (Anthropic): Abstand zu jetzt, nie negativ.
     try:
-        moment = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        moment = datetime.fromisoformat(raw)
     except ValueError:
         return None
     if moment.tzinfo is None:

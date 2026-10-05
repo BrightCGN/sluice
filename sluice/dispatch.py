@@ -21,6 +21,7 @@ from sluice.capacity import CapacityStore, StreamTelemetry, Usage
 from sluice.capacity import capacity_store as _default_capacity
 from sluice.dialect import messages_carry_tool_artifacts
 from sluice.guard import guarded_egress
+from sluice.modes import EgressPayload, Mode, Scope, select_mode
 from sluice.policy import Profile
 from sluice.providers import (
     TOOL_CAPABLE_PROVIDERS,
@@ -28,7 +29,6 @@ from sluice.providers import (
     canonical_provider,
     select_egress_adapter,
 )
-from sluice.modes import EgressPayload, Mode, Scope, select_mode
 
 log = structlog.get_logger("sluice.dispatch")
 
