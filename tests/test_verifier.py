@@ -65,3 +65,24 @@ def test_financial_profile_blocks_iban_bic_account() -> None:
 def test_financial_profile_includes_infra_set() -> None:
     # strenger justiert: das komplette Infra-Set gilt mit.
     assert not verify_no_identifiers("Rückfragen an ceo@kunde-bank.de", "financial").clean
+
+
+def test_verifier_pattern_with_capturing_group() -> None:
+    import re
+
+    from sluice.detectors import DenyPattern, DetectorProfile
+
+    custom = DetectorProfile(
+        name="custom_capture",
+        deny=(
+            DenyPattern(
+                finding="TEST_TOKEN",
+                pattern=re.compile(r"TOKEN-(A|B)-\d+"),
+                placeholder="[TOKEN]",
+                per_match=True,
+            ),
+        ),
+    )
+    result = verify_no_identifiers("Hier ist TOKEN-A-12345 im Text", custom)
+    assert not result.clean
+    assert "TEST_TOKEN: TOKEN-A-12345" in result.findings

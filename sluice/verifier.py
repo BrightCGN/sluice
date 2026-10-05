@@ -15,9 +15,8 @@ dem Detektor-Profil des Konsumenten (Spec §5.1) statt hart verdrahtet.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 
 from sluice.detectors import (
     DetectorProfile,
@@ -62,9 +61,10 @@ def verify_no_identifiers(
     findings: list[str] = []
     for deny in deny_patterns:
         if deny.per_match:
-            for match in deny.pattern.findall(text):
-                if deny.validate is None or deny.validate(match):
-                    findings.append(f"{deny.finding}: {match}")
+            for match in deny.pattern.finditer(text):
+                value = match.group(0)
+                if deny.validate is None or deny.validate(value):
+                    findings.append(f"{deny.finding}: {value}")
         elif deny.pattern.search(text):
             findings.append(deny.finding)
 
